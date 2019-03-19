@@ -167,7 +167,7 @@ deps = {
   'src/third_party/colorama/src':
     Var('chromium_git') + '/colorama.git' + '@' + '799604a1041e9b3bc5d2789ecbd7e8db2e18e6b8',
   'src/third_party/depot_tools':
-    Var('chromium_git') + '/depot_tools.git' + '@' + 'mirror',
+    Var('chromium_git') + '/depot_tools.git' + '@' + 'efe902b20b6ae0d367b354bdaa2e10c19349f880',
   'src/third_party/errorprone/lib': {
       'url': Var('chromium_git') + '/errorprone.git' + '@' + '980d49e839aa4984015efed34b0134d4b2c9b6d7',
       'condition': 'checkout_android',
@@ -1449,8 +1449,7 @@ hooks = [
     'name': 'msan_chained_origins',
     'pattern': '.',
     'condition': 'checkout_instrumented_libraries',
-    'action': [ 'python',
-                'src/third_party/depot_tools/download_from_google_storage.py',
+    'action': [ 'download_from_google_storage',
                 "--no_resume",
                 "--no_auth",
                 "--bucket", "chromium-instrumented-libraries",
@@ -1461,8 +1460,7 @@ hooks = [
     'name': 'msan_no_origins',
     'pattern': '.',
     'condition': 'checkout_instrumented_libraries',
-    'action': [ 'python',
-                'src/third_party/depot_tools/download_from_google_storage.py',
+    'action': [ 'download_from_google_storage',
                 "--no_resume",
                 "--no_auth",
                 "--bucket", "chromium-instrumented-libraries",
@@ -1473,13 +1471,10 @@ hooks = [
     # Download test resources, i.e. video and audio files from Google Storage.
     'pattern': '.',
     'action': ['download_from_google_storage',
-               '--directory',
-               '--recursive',
-               '--num_threads=10',
-               '--no_auth',
-               '--quiet',
+                "--no_resume",
+                "--no_auth",
                '--bucket', 'chromium-webrtc-resources',
-               'src/resources'],
+               "-s", 'src/resources.tgz.sha1'],
   },
 ]
 
