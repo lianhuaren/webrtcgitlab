@@ -598,7 +598,7 @@ EncodedImageCallback::Result VideoSendStreamImpl::OnEncodedImage(
     // will need to do some translation to produce reference info using frame
     // ids.
     std::vector<int64_t> referenced_frame_ids;
-    if (encoded_image._frameType != kVideoFrameKey) {
+    if (encoded_image._frameType != VideoFrameType::kVideoFrameKey) {
       RTC_DCHECK_GT(frame_id, 0);
       referenced_frame_ids.push_back(frame_id - 1);
     }
@@ -650,10 +650,14 @@ uint32_t VideoSendStreamImpl::OnBitrateUpdated(BitrateAllocationUpdate update) {
       rtc::dchecked_cast<uint8_t>(update.packet_loss_ratio * 256),
       update.round_trip_time.ms(), stats_proxy_->GetSendFrameRate());
   encoder_target_rate_bps_ = rtp_video_sender_->GetPayloadBitrateBps();
+  const uint32_t protection_bitrate_bps =
+      rtp_video_sender_->GetProtectionBitrateBps();
   DataRate headroom = DataRate::Zero();
-  if (encoder_target_rate_bps_ > encoder_max_bitrate_bps_) {
+  if (encoder_target_rate_bps_ >
+      encoder_max_bitrate_bps_ + protection_bitrate_bps) {
     headroom =
-        DataRate::bps(encoder_target_rate_bps_ - encoder_max_bitrate_bps_);
+        DataRate::bps(encoder_target_rate_bps_ -
+                      (encoder_max_bitrate_bps_ + protection_bitrate_bps));
   }
   encoder_target_rate_bps_ =
       std::min(encoder_max_bitrate_bps_, encoder_target_rate_bps_);
@@ -662,7 +666,7 @@ uint32_t VideoSendStreamImpl::OnBitrateUpdated(BitrateAllocationUpdate update) {
       rtc::dchecked_cast<uint8_t>(update.packet_loss_ratio * 256),
       update.round_trip_time.ms());
   stats_proxy_->OnSetEncoderTargetRate(encoder_target_rate_bps_);
-  return rtp_video_sender_->GetProtectionBitrateBps();
+  return protection_bitrate_bps;
 }
 
 }  // namespace internal

@@ -62,10 +62,10 @@ class VideoCodecTestFixtureImpl : public VideoCodecTestFixture {
 
   void CreateEncoderAndDecoder();
   void DestroyEncoderAndDecoder();
-  void SetUpAndInitObjects(rtc::test::TaskQueueForTest* task_queue,
+  void SetUpAndInitObjects(TaskQueueForTest* task_queue,
                            int initial_bitrate_kbps,
                            int initial_framerate_fps);
-  void ReleaseAndCloseObjects(rtc::test::TaskQueueForTest* task_queue);
+  void ReleaseAndCloseObjects(TaskQueueForTest* task_queue);
 
   void ProcessAllFrames(rtc::TaskQueue* task_queue,
                         const std::vector<RateProfile>& rate_profiles);
@@ -83,7 +83,7 @@ class VideoCodecTestFixtureImpl : public VideoCodecTestFixture {
       size_t target_bitrate_kbps,
       float input_framerate_fps);
 
-  void PrintSettings(rtc::test::TaskQueueForTest* task_queue) const;
+  void PrintSettings(TaskQueueForTest* task_queue) const;
 
   // Codecs.
   const std::unique_ptr<VideoEncoderFactory> encoder_factory_;
@@ -95,7 +95,7 @@ class VideoCodecTestFixtureImpl : public VideoCodecTestFixture {
   Config config_;
   VideoCodecTestStatsImpl stats_;
   std::unique_ptr<FrameReader> source_frame_reader_;
-  VideoProcessor::IvfFileWriterList encoded_frame_writers_;
+  VideoProcessor::IvfFileWriterMap encoded_frame_writers_;
   VideoProcessor::FrameWriterList decoded_frame_writers_;
   std::unique_ptr<VideoProcessor> processor_;
   std::unique_ptr<CpuProcessTime> cpu_process_time_;

@@ -727,7 +727,7 @@ int VP9EncoderImpl::Encode(const VideoFrame& input_image,
 
   // We only support one stream at the moment.
   if (frame_types && !frame_types->empty()) {
-    if ((*frame_types)[0] == kVideoFrameKey) {
+    if ((*frame_types)[0] == VideoFrameType::kVideoFrameKey) {
       force_key_frame_ = true;
     }
   }
@@ -1056,6 +1056,7 @@ void VP9EncoderImpl::FillReferenceIndices(const vpx_codec_cx_pkt& pkt,
   if (is_svc_) {
     vpx_svc_ref_frame_config_t enc_layer_conf = {{0}};
     vpx_codec_control(encoder_, VP9E_GET_SVC_REF_FRAME_CONFIG, &enc_layer_conf);
+    int ref_buf_flags = 0;
 
     if (enc_layer_conf.reference_last[layer_id.spatial_layer_id]) {
       const size_t fb_idx =
@@ -1064,6 +1065,7 @@ void VP9EncoderImpl::FillReferenceIndices(const vpx_codec_cx_pkt& pkt,
       if (std::find(ref_buf_list.begin(), ref_buf_list.end(),
                     ref_buf_.at(fb_idx)) == ref_buf_list.end()) {
         ref_buf_list.push_back(ref_buf_.at(fb_idx));
+        ref_buf_flags |= 1 << fb_idx;
       }
     }
 
@@ -1074,6 +1076,7 @@ void VP9EncoderImpl::FillReferenceIndices(const vpx_codec_cx_pkt& pkt,
       if (std::find(ref_buf_list.begin(), ref_buf_list.end(),
                     ref_buf_.at(fb_idx)) == ref_buf_list.end()) {
         ref_buf_list.push_back(ref_buf_.at(fb_idx));
+        ref_buf_flags |= 1 << fb_idx;
       }
     }
 
@@ -1084,8 +1087,22 @@ void VP9EncoderImpl::FillReferenceIndices(const vpx_codec_cx_pkt& pkt,
       if (std::find(ref_buf_list.begin(), ref_buf_list.end(),
                     ref_buf_.at(fb_idx)) == ref_buf_list.end()) {
         ref_buf_list.push_back(ref_buf_.at(fb_idx));
+        ref_buf_flags |= 1 << fb_idx;
       }
     }
+
+    RTC_LOG(LS_VERBOSE) << "Frame " << pic_num << " sl "
+                        << layer_id.spatial_layer_id << " tl "
+                        << layer_id.temporal_layer_id << " refered buffers "
+                        << (ref_buf_flags & (1 << 0) ? 1 : 0)
+                        << (ref_buf_flags & (1 << 1) ? 1 : 0)
+                        << (ref_buf_flags & (1 << 2) ? 1 : 0)
+                        << (ref_buf_flags & (1 << 3) ? 1 : 0)
+                        << (ref_buf_flags & (1 << 4) ? 1 : 0)
+                        << (ref_buf_flags & (1 << 5) ? 1 : 0)
+                        << (ref_buf_flags & (1 << 6) ? 1 : 0)
+                        << (ref_buf_flags & (1 << 7) ? 1 : 0);
+
   } else if (!is_key_frame) {
     RTC_DCHECK_EQ(num_spatial_layers_, 1);
     RTC_DCHECK_EQ(num_temporal_layers_, 1);
@@ -1146,27 +1163,32 @@ void VP9EncoderImpl::UpdateReferenceBuffers(const vpx_codec_cx_pkt& pkt,
   vpx_svc_layer_id_t layer_id = {0};
   vpx_codec_control(encoder_, VP9E_GET_SVC_LAYER_ID, &layer_id);
 
-  const bool is_key_frame =
-      (pkt.data.frame.flags & VPX_FRAME_IS_KEY) ? true : false;
-
   RefFrameBuffer frame_buf(pic_num, layer_id.spatial_layer_id,
                            layer_id.temporal_layer_id);
 
-  if (is_key_frame && layer_id.spatial_layer_id == 0) {
-    // Key frame updates all ref buffers.
-    for (size_t i = 0; i < kNumVp9Buffers; ++i) {
-      ref_buf_[i] = frame_buf;
-    }
-  } else if (is_svc_) {
+  if (is_svc_) {
     vpx_svc_ref_frame_config_t enc_layer_conf = {{0}};
     vpx_codec_control(encoder_, VP9E_GET_SVC_REF_FRAME_CONFIG, &enc_layer_conf);
+    const int update_buffer_slot =
+        enc_layer_conf.update_buffer_slot[layer_id.spatial_layer_id];
 
     for (size_t i = 0; i < kNumVp9Buffers; ++i) {
-      if (enc_layer_conf.update_buffer_slot[layer_id.spatial_layer_id] &
-          (1 << i)) {
+      if (update_buffer_slot & (1 << i)) {
         ref_buf_[i] = frame_buf;
       }
     }
+
+    RTC_LOG(LS_VERBOSE) << "Frame " << pic_num << " sl "
+                        << layer_id.spatial_layer_id << " tl "
+                        << layer_id.temporal_layer_id << " updated buffers "
+                        << (update_buffer_slot & (1 << 0) ? 1 : 0)
+                        << (update_buffer_slot & (1 << 1) ? 1 : 0)
+                        << (update_buffer_slot & (1 << 2) ? 1 : 0)
+                        << (update_buffer_slot & (1 << 3) ? 1 : 0)
+                        << (update_buffer_slot & (1 << 4) ? 1 : 0)
+                        << (update_buffer_slot & (1 << 5) ? 1 : 0)
+                        << (update_buffer_slot & (1 << 6) ? 1 : 0)
+                        << (update_buffer_slot & (1 << 7) ? 1 : 0);
   } else {
     RTC_DCHECK_EQ(num_spatial_layers_, 1);
     RTC_DCHECK_EQ(num_temporal_layers_, 1);
@@ -1302,9 +1324,9 @@ int VP9EncoderImpl::GetEncodedLayerFrame(const vpx_codec_cx_pkt* pkt) {
   RTC_DCHECK(is_key_frame || !force_key_frame_);
 
   // Check if encoded frame is a key frame.
-  encoded_image_._frameType = kVideoFrameDelta;
+  encoded_image_._frameType = VideoFrameType::kVideoFrameDelta;
   if (is_key_frame) {
-    encoded_image_._frameType = kVideoFrameKey;
+    encoded_image_._frameType = VideoFrameType::kVideoFrameKey;
     force_key_frame_ = false;
   }
   RTC_DCHECK_LE(encoded_image_.size(), encoded_image_.capacity());
@@ -1517,7 +1539,7 @@ int VP9DecoderImpl::Decode(const EncodedImage& input_image,
   }
   // Always start with a complete key frame.
   if (key_frame_required_) {
-    if (input_image._frameType != kVideoFrameKey)
+    if (input_image._frameType != VideoFrameType::kVideoFrameKey)
       return WEBRTC_VIDEO_CODEC_ERROR;
     // We have a key frame - is it complete?
     if (input_image._completeFrame) {

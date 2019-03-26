@@ -7,8 +7,8 @@
  *  in the file PATENTS.  All contributing project authors may
  *  be found in the AUTHORS file in the root of the source tree.
  */
-#ifndef TEST_PC_E2E_API_PEERCONNECTION_QUALITY_TEST_FIXTURE_H_
-#define TEST_PC_E2E_API_PEERCONNECTION_QUALITY_TEST_FIXTURE_H_
+#ifndef API_TEST_PEERCONNECTION_QUALITY_TEST_FIXTURE_H_
+#define API_TEST_PEERCONNECTION_QUALITY_TEST_FIXTURE_H_
 
 #include <memory>
 #include <string>
@@ -18,9 +18,12 @@
 #include "api/async_resolver_factory.h"
 #include "api/call/call_factory_interface.h"
 #include "api/fec_controller.h"
+#include "api/function_view.h"
 #include "api/media_transport_interface.h"
 #include "api/peer_connection_interface.h"
+#include "api/test/audio_quality_analyzer_interface.h"
 #include "api/test/simulated_network.h"
+#include "api/test/video_quality_analyzer_interface.h"
 #include "api/transport/network_control.h"
 #include "api/units/time_delta.h"
 #include "api/video_codecs/video_decoder_factory.h"
@@ -31,78 +34,13 @@
 #include "rtc_base/rtc_certificate_generator.h"
 #include "rtc_base/ssl_certificate.h"
 #include "rtc_base/thread.h"
-#include "test/pc/e2e/api/audio_quality_analyzer_interface.h"
-#include "test/pc/e2e/api/video_quality_analyzer_interface.h"
 
 namespace webrtc {
-namespace test {
+namespace webrtc_pc_e2e {
 
-// TODO(titovartem) move to API when it will be stabilized.
+// API is in development. Can be changed/removed without notice.
 class PeerConnectionE2EQualityTestFixture {
  public:
-  // Contains most part from PeerConnectionFactoryDependencies. Also all fields
-  // are optional and defaults will be provided by fixture implementation if
-  // any will be omitted.
-  //
-  // Separate class was introduced to clarify which components can be
-  // overridden. For example worker and signaling threads will be provided by
-  // fixture implementation. The same is applicable to the media engine. So user
-  // can override only some parts of media engine like video encoder/decoder
-  // factories.
-  struct PeerConnectionFactoryComponents {
-    std::unique_ptr<CallFactoryInterface> call_factory;
-    std::unique_ptr<RtcEventLogFactoryInterface> event_log_factory;
-    std::unique_ptr<FecControllerFactoryInterface> fec_controller_factory;
-    std::unique_ptr<NetworkControllerFactoryInterface>
-        network_controller_factory;
-    std::unique_ptr<MediaTransportFactory> media_transport_factory;
-
-    // Will be passed to MediaEngineInterface, that will be used in
-    // PeerConnectionFactory.
-    std::unique_ptr<VideoEncoderFactory> video_encoder_factory;
-    std::unique_ptr<VideoDecoderFactory> video_decoder_factory;
-  };
-
-  // Contains most parts from PeerConnectionDependencies. Also all fields are
-  // optional and defaults will be provided by fixture implementation if any
-  // will be omitted.
-  //
-  // Separate class was introduced to clarify which components can be
-  // overridden. For example observer, which is required to
-  // PeerConnectionDependencies, will be provided by fixture implementation,
-  // so client can't inject its own. Also only network manager can be overridden
-  // inside port allocator.
-  struct PeerConnectionComponents {
-    PeerConnectionComponents(rtc::NetworkManager* network_manager)
-        : network_manager(network_manager) {
-      RTC_CHECK(network_manager);
-    }
-
-    rtc::NetworkManager* const network_manager;
-    std::unique_ptr<webrtc::AsyncResolverFactory> async_resolver_factory;
-    std::unique_ptr<rtc::RTCCertificateGeneratorInterface> cert_generator;
-    std::unique_ptr<rtc::SSLCertificateVerifier> tls_cert_verifier;
-  };
-
-  // Contains all components, that can be overridden in peer connection. Also
-  // has a network thread, that will be used to communicate with another peers.
-  struct InjectableComponents {
-    explicit InjectableComponents(rtc::Thread* network_thread,
-                                  rtc::NetworkManager* network_manager)
-        : network_thread(network_thread),
-          pcf_dependencies(
-              absl::make_unique<PeerConnectionFactoryComponents>()),
-          pc_dependencies(
-              absl::make_unique<PeerConnectionComponents>(network_manager)) {
-      RTC_CHECK(network_thread);
-    }
-
-    rtc::Thread* const network_thread;
-
-    std::unique_ptr<PeerConnectionFactoryComponents> pcf_dependencies;
-    std::unique_ptr<PeerConnectionComponents> pc_dependencies;
-  };
-
   // Contains screen share video stream properties.
   struct ScreenShareConfig {
     // If true, slides will be generated programmatically.
@@ -184,19 +122,53 @@ class PeerConnectionE2EQualityTestFixture {
     cricket::AudioOptions audio_options;
   };
 
-  // Contains information about call media streams (up to 1 audio stream and
-  // unlimited amount of video streams) and rtc configuration, that will be used
-  // to set up peer connection.
-  struct Params {
-    // If |video_configs| is empty - no video should be added to the test call.
-    std::vector<VideoConfig> video_configs;
-    // If |audio_config| is set audio stream will be configured
-    absl::optional<AudioConfig> audio_config;
-    // If |rtc_event_log_path| is set, an RTCEventLog will be saved in that
-    // location and it will be available for further analysis.
-    absl::optional<std::string> rtc_event_log_path;
+  // This class is used to fully configure one peer inside the call.
+  class PeerConfigurer {
+   public:
+    virtual ~PeerConfigurer() = default;
 
-    PeerConnectionInterface::RTCConfiguration rtc_configuration;
+    // The parameters of the following 7 methods will be passed to the
+    // PeerConnectionFactoryInterface implementation that will be created for
+    // this peer.
+    virtual PeerConfigurer* SetCallFactory(
+        std::unique_ptr<CallFactoryInterface> call_factory) = 0;
+    virtual PeerConfigurer* SetEventLogFactory(
+        std::unique_ptr<RtcEventLogFactoryInterface> event_log_factory) = 0;
+    virtual PeerConfigurer* SetFecControllerFactory(
+        std::unique_ptr<FecControllerFactoryInterface>
+            fec_controller_factory) = 0;
+    virtual PeerConfigurer* SetNetworkControllerFactory(
+        std::unique_ptr<NetworkControllerFactoryInterface>
+            network_controller_factory) = 0;
+    virtual PeerConfigurer* SetMediaTransportFactory(
+        std::unique_ptr<MediaTransportFactory> media_transport_factory) = 0;
+    virtual PeerConfigurer* SetVideoEncoderFactory(
+        std::unique_ptr<VideoEncoderFactory> video_encoder_factory) = 0;
+    virtual PeerConfigurer* SetVideoDecoderFactory(
+        std::unique_ptr<VideoDecoderFactory> video_decoder_factory) = 0;
+
+    // The parameters of the following 3 methods will be passed to the
+    // PeerConnectionInterface implementation that will be created for this
+    // peer.
+    virtual PeerConfigurer* SetAsyncResolverFactory(
+        std::unique_ptr<webrtc::AsyncResolverFactory>
+            async_resolver_factory) = 0;
+    virtual PeerConfigurer* SetRTCCertificateGenerator(
+        std::unique_ptr<rtc::RTCCertificateGeneratorInterface>
+            cert_generator) = 0;
+    virtual PeerConfigurer* SetSSLCertificateVerifier(
+        std::unique_ptr<rtc::SSLCertificateVerifier> tls_cert_verifier) = 0;
+
+    // Add new video stream to the call that will be sent from this peer.
+    virtual PeerConfigurer* AddVideoConfig(VideoConfig config) = 0;
+    // Set the audio stream for the call from this peer. If this method won't
+    // be invoked, this peer will send no audio.
+    virtual PeerConfigurer* SetAudioConfig(AudioConfig config) = 0;
+    // If is set, an RTCEventLog will be saved in that location and it will be
+    // available for further analysis.
+    virtual PeerConfigurer* SetRtcEventLogPath(std::string path) = 0;
+    virtual PeerConfigurer* SetRTCConfiguration(
+        PeerConnectionInterface::RTCConfiguration configuration) = 0;
   };
 
   // Contains parameters, that describe how long framework should run quality
@@ -207,6 +179,8 @@ class PeerConnectionE2EQualityTestFixture {
     // it will be shut downed.
     TimeDelta run_duration;
   };
+
+  virtual ~PeerConnectionE2EQualityTestFixture() = default;
 
   // Add activity that will be executed on the best effort at least after
   // |target_time_since_start| after call will be set up (after offer/answer
@@ -222,15 +196,19 @@ class PeerConnectionE2EQualityTestFixture {
                             TimeDelta interval,
                             std::function<void(TimeDelta)> func) = 0;
 
-  virtual void Run(std::unique_ptr<InjectableComponents> alice_components,
-                   std::unique_ptr<Params> alice_params,
-                   std::unique_ptr<InjectableComponents> bob_components,
-                   std::unique_ptr<Params> bob_params,
-                   RunParams run_params) = 0;
-  virtual ~PeerConnectionE2EQualityTestFixture() = default;
+  // Add a new peer to the call and return an object through which caller
+  // can configure peer's behavior.
+  // |network_thread| will be used as network thread for peer's peer connection
+  // |network_manager| will be used to provide network interfaces for peer's
+  // peer connection.
+  // |configurer| function will be used to configure peer in the call.
+  virtual void AddPeer(rtc::Thread* network_thread,
+                       rtc::NetworkManager* network_manager,
+                       rtc::FunctionView<void(PeerConfigurer*)> configurer) = 0;
+  virtual void Run(RunParams run_params) = 0;
 };
 
-}  // namespace test
+}  // namespace webrtc_pc_e2e
 }  // namespace webrtc
 
-#endif  // TEST_PC_E2E_API_PEERCONNECTION_QUALITY_TEST_FIXTURE_H_
+#endif  // API_TEST_PEERCONNECTION_QUALITY_TEST_FIXTURE_H_

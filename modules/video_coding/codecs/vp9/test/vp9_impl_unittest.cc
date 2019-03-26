@@ -127,7 +127,7 @@ TEST_F(TestVp9Impl, EncodeDecode) {
   CodecSpecificInfo codec_specific_info;
   ASSERT_TRUE(WaitForEncodedFrame(&encoded_frame, &codec_specific_info));
   // First frame should be a key frame.
-  encoded_frame._frameType = kVideoFrameKey;
+  encoded_frame._frameType = VideoFrameType::kVideoFrameKey;
   EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK,
             decoder_->Decode(encoded_frame, false, nullptr, 0));
   std::unique_ptr<VideoFrame> decoded_frame;
@@ -227,7 +227,7 @@ TEST_F(TestVp9Impl, DecodedQpEqualsEncodedQp) {
   CodecSpecificInfo codec_specific_info;
   ASSERT_TRUE(WaitForEncodedFrame(&encoded_frame, &codec_specific_info));
   // First frame should be a key frame.
-  encoded_frame._frameType = kVideoFrameKey;
+  encoded_frame._frameType = VideoFrameType::kVideoFrameKey;
   EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK,
             decoder_->Decode(encoded_frame, false, nullptr, 0));
   std::unique_ptr<VideoFrame> decoded_frame;
@@ -492,24 +492,36 @@ TEST_F(TestVp9Impl, InterLayerPred) {
     ASSERT_TRUE(WaitForEncodedFrames(&frames, &codec_specific));
 
     // Key frame.
-    EXPECT_FALSE(codec_specific[0].codecSpecific.VP9.inter_pic_predicted);
-    EXPECT_EQ(frames[0].SpatialIndex(), 0);
+    ASSERT_EQ(frames[0].SpatialIndex(), 0);
+    ASSERT_FALSE(codec_specific[0].codecSpecific.VP9.inter_pic_predicted);
+    EXPECT_FALSE(codec_specific[0].codecSpecific.VP9.inter_layer_predicted);
     EXPECT_EQ(codec_specific[0].codecSpecific.VP9.non_ref_for_inter_layer_pred,
               inter_layer_pred == InterLayerPredMode::kOff);
+
+    ASSERT_EQ(frames[1].SpatialIndex(), 1);
+    ASSERT_FALSE(codec_specific[1].codecSpecific.VP9.inter_pic_predicted);
+    EXPECT_EQ(codec_specific[1].codecSpecific.VP9.inter_layer_predicted,
+              inter_layer_pred == InterLayerPredMode::kOn ||
+                  inter_layer_pred == InterLayerPredMode::kOnKeyPic);
     EXPECT_TRUE(
         codec_specific[1].codecSpecific.VP9.non_ref_for_inter_layer_pred);
 
+    // Delta frame.
     SetWaitForEncodedFramesThreshold(2);
     EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK,
               encoder_->Encode(*NextInputFrame(), nullptr));
     ASSERT_TRUE(WaitForEncodedFrames(&frames, &codec_specific));
 
-    // Delta frame.
-    EXPECT_TRUE(codec_specific[0].codecSpecific.VP9.inter_pic_predicted);
-    EXPECT_EQ(frames[0].SpatialIndex(), 0);
+    ASSERT_EQ(frames[0].SpatialIndex(), 0);
+    ASSERT_TRUE(codec_specific[0].codecSpecific.VP9.inter_pic_predicted);
+    EXPECT_FALSE(codec_specific[0].codecSpecific.VP9.inter_layer_predicted);
     EXPECT_EQ(codec_specific[0].codecSpecific.VP9.non_ref_for_inter_layer_pred,
-              inter_layer_pred == InterLayerPredMode::kOff ||
-                  inter_layer_pred == InterLayerPredMode::kOnKeyPic);
+              inter_layer_pred != InterLayerPredMode::kOn);
+
+    ASSERT_EQ(frames[1].SpatialIndex(), 1);
+    ASSERT_TRUE(codec_specific[1].codecSpecific.VP9.inter_pic_predicted);
+    EXPECT_EQ(codec_specific[1].codecSpecific.VP9.inter_layer_predicted,
+              inter_layer_pred == InterLayerPredMode::kOn);
     EXPECT_TRUE(
         codec_specific[1].codecSpecific.VP9.non_ref_for_inter_layer_pred);
   }
@@ -554,15 +566,19 @@ TEST_F(TestVp9Impl,
         const bool is_first_upper_layer_frame = (sl_idx > 0 && frame_num == 0);
         if (is_first_upper_layer_frame) {
           if (inter_layer_pred == InterLayerPredMode::kOn) {
-            EXPECT_EQ(encoded_frame[0]._frameType, kVideoFrameDelta);
+            EXPECT_EQ(encoded_frame[0]._frameType,
+                      VideoFrameType::kVideoFrameDelta);
           } else {
-            EXPECT_EQ(encoded_frame[0]._frameType, kVideoFrameKey);
+            EXPECT_EQ(encoded_frame[0]._frameType,
+                      VideoFrameType::kVideoFrameKey);
           }
         } else if (sl_idx == 0 && frame_num == 0) {
-          EXPECT_EQ(encoded_frame[0]._frameType, kVideoFrameKey);
+          EXPECT_EQ(encoded_frame[0]._frameType,
+                    VideoFrameType::kVideoFrameKey);
         } else {
           for (size_t i = 0; i <= sl_idx; ++i) {
-            EXPECT_EQ(encoded_frame[i]._frameType, kVideoFrameDelta);
+            EXPECT_EQ(encoded_frame[i]._frameType,
+                      VideoFrameType::kVideoFrameDelta);
           }
         }
       }
@@ -611,7 +627,7 @@ TEST_F(TestVp9Impl,
 
         for (size_t i = 0; i <= sl_idx; ++i) {
           const bool is_keyframe =
-              encoded_frame[0]._frameType == kVideoFrameKey;
+              encoded_frame[0]._frameType == VideoFrameType::kVideoFrameKey;
           const bool is_first_upper_layer_frame =
               (i == sl_idx && frame_num == 0);
           // Interframe references are there, unless it's a keyframe,
@@ -681,7 +697,7 @@ TEST_F(TestVp9Impl, EnablingDisablingUpperLayerInTheSameGof) {
             encoder_->Encode(*NextInputFrame(), nullptr));
   ASSERT_TRUE(WaitForEncodedFrames(&encoded_frame, &codec_specific_info));
   ASSERT_EQ(codec_specific_info.size(), 1u);
-  EXPECT_EQ(encoded_frame[0]._frameType, kVideoFrameDelta);
+  EXPECT_EQ(encoded_frame[0]._frameType, VideoFrameType::kVideoFrameDelta);
   EXPECT_EQ(codec_specific_info[0].codecSpecific.VP9.temporal_idx, 1);
   EXPECT_EQ(codec_specific_info[0].codecSpecific.VP9.inter_pic_predicted, true);
 
@@ -700,7 +716,7 @@ TEST_F(TestVp9Impl, EnablingDisablingUpperLayerInTheSameGof) {
             encoder_->Encode(*NextInputFrame(), nullptr));
   ASSERT_TRUE(WaitForEncodedFrames(&encoded_frame, &codec_specific_info));
   ASSERT_EQ(codec_specific_info.size(), 2u);
-  EXPECT_EQ(encoded_frame[0]._frameType, kVideoFrameDelta);
+  EXPECT_EQ(encoded_frame[0]._frameType, VideoFrameType::kVideoFrameDelta);
   EXPECT_EQ(codec_specific_info[0].codecSpecific.VP9.temporal_idx, 0);
   EXPECT_EQ(codec_specific_info[0].codecSpecific.VP9.inter_pic_predicted, true);
   EXPECT_EQ(codec_specific_info[1].codecSpecific.VP9.inter_pic_predicted, true);
@@ -760,7 +776,7 @@ TEST_F(TestVp9Impl, EnablingDisablingUpperLayerAccrossGof) {
               encoder_->Encode(*NextInputFrame(), nullptr));
     ASSERT_TRUE(WaitForEncodedFrames(&encoded_frame, &codec_specific_info));
     ASSERT_EQ(codec_specific_info.size(), 1u);
-    EXPECT_EQ(encoded_frame[0]._frameType, kVideoFrameDelta);
+    EXPECT_EQ(encoded_frame[0]._frameType, VideoFrameType::kVideoFrameDelta);
     EXPECT_EQ(codec_specific_info[0].codecSpecific.VP9.temporal_idx, 1 - i % 2);
     EXPECT_EQ(codec_specific_info[0].codecSpecific.VP9.inter_pic_predicted,
               true);
@@ -781,7 +797,7 @@ TEST_F(TestVp9Impl, EnablingDisablingUpperLayerAccrossGof) {
             encoder_->Encode(*NextInputFrame(), nullptr));
   ASSERT_TRUE(WaitForEncodedFrames(&encoded_frame, &codec_specific_info));
   ASSERT_EQ(codec_specific_info.size(), 2u);
-  EXPECT_EQ(encoded_frame[0]._frameType, kVideoFrameDelta);
+  EXPECT_EQ(encoded_frame[0]._frameType, VideoFrameType::kVideoFrameDelta);
   EXPECT_EQ(codec_specific_info[0].codecSpecific.VP9.temporal_idx, 0);
   EXPECT_EQ(codec_specific_info[0].codecSpecific.VP9.inter_pic_predicted, true);
   EXPECT_EQ(codec_specific_info[1].codecSpecific.VP9.inter_pic_predicted,
@@ -1420,7 +1436,13 @@ class TestVp9ImplProfile2 : public TestVp9Impl {
   }
 };
 
-TEST_F(TestVp9ImplProfile2, EncodeDecode) {
+#if defined(OS_IOS)
+// TODO(webrtc:10473): Libvpx VP9 encoder crashes on iOS simulator.
+#define MAYBE_EncodeDecode DISABLED_EncodeDecode
+#else
+#define MAYBE_EncodeDecode EncodeDecode
+#endif
+TEST_F(TestVp9ImplProfile2, MAYBE_EncodeDecode) {
   if (!encoder_)
     return;
 
@@ -1430,7 +1452,7 @@ TEST_F(TestVp9ImplProfile2, EncodeDecode) {
   CodecSpecificInfo codec_specific_info;
   ASSERT_TRUE(WaitForEncodedFrame(&encoded_frame, &codec_specific_info));
   // First frame should be a key frame.
-  encoded_frame._frameType = kVideoFrameKey;
+  encoded_frame._frameType = VideoFrameType::kVideoFrameKey;
   EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK,
             decoder_->Decode(encoded_frame, false, nullptr, 0));
   std::unique_ptr<VideoFrame> decoded_frame;

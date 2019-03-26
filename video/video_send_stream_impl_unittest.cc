@@ -137,7 +137,7 @@ class VideoSendStreamImplTest : public ::testing::Test {
   RtcEventLogNullImpl event_log_;
   VideoSendStream::Config config_;
   SendDelayStats send_delay_stats_;
-  rtc::test::TaskQueueForTest test_queue_;
+  TaskQueueForTest test_queue_;
   std::unique_ptr<ProcessThread> process_thread_;
   CallStats call_stats_;
   SendStatisticsProxy stats_proxy_;
@@ -675,6 +675,38 @@ TEST_F(VideoSendStreamImplTest, CallsVideoStreamEncoderOnBitrateUpdate) {
                 OnBitrateUpdated(qvga_max_bitrate, headroom, 0, _));
     update.target_bitrate = rate_with_headroom;
     update.link_capacity = rate_with_headroom;
+    static_cast<BitrateAllocatorObserver*>(vss_impl.get())
+        ->OnBitrateUpdated(update);
+
+    // Add protection bitrate to the mix, this should be subtracted from the
+    // headroom.
+    const uint32_t protection_bitrate_bps = 10000;
+    EXPECT_CALL(rtp_video_sender_, GetProtectionBitrateBps())
+        .WillOnce(Return(protection_bitrate_bps));
+
+    EXPECT_CALL(rtp_video_sender_,
+                OnBitrateUpdated(rate_with_headroom.bps(), _,
+                                 update.round_trip_time.ms(), _));
+    EXPECT_CALL(rtp_video_sender_, GetPayloadBitrateBps())
+        .WillOnce(Return(rate_with_headroom.bps()));
+    const DataRate headroom_minus_protection =
+        headroom - DataRate::bps(protection_bitrate_bps);
+    EXPECT_CALL(
+        video_stream_encoder_,
+        OnBitrateUpdated(qvga_max_bitrate, headroom_minus_protection, 0, _));
+    static_cast<BitrateAllocatorObserver*>(vss_impl.get())
+        ->OnBitrateUpdated(update);
+
+    // Protection bitrate exceeds headroom, make sure it is capped to 0.
+    EXPECT_CALL(rtp_video_sender_, GetProtectionBitrateBps())
+        .WillOnce(Return(headroom.bps() + 1000));
+    EXPECT_CALL(rtp_video_sender_,
+                OnBitrateUpdated(rate_with_headroom.bps(), _,
+                                 update.round_trip_time.ms(), _));
+    EXPECT_CALL(rtp_video_sender_, GetPayloadBitrateBps())
+        .WillOnce(Return(rate_with_headroom.bps()));
+    EXPECT_CALL(video_stream_encoder_,
+                OnBitrateUpdated(qvga_max_bitrate, DataRate::Zero(), 0, _));
     static_cast<BitrateAllocatorObserver*>(vss_impl.get())
         ->OnBitrateUpdated(update);
 

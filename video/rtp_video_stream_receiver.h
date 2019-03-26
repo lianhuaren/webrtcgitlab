@@ -59,7 +59,6 @@ class UlpfecReceiver;
 class RtpVideoStreamReceiver : public LossNotificationSender,
                                public RecoveredPacketReceiver,
                                public RtpPacketSinkInterface,
-                               public VCMFrameTypeCallback,
                                public VCMPacketRequestCallback,
                                public video_coding::OnAssembledFrameCallback,
                                public video_coding::OnCompleteFrameCallback,
@@ -111,15 +110,15 @@ class RtpVideoStreamReceiver : public LossNotificationSender,
       size_t payload_size,
       const RTPHeader& rtp_header,
       const RTPVideoHeader& video_header,
-      FrameType frame_type,
+      VideoFrameType frame_type,
       const absl::optional<RtpGenericFrameDescriptor>& generic_descriptor,
       bool is_recovered);
 
   // Implements RecoveredPacketReceiver.
   void OnRecoveredPacket(const uint8_t* packet, size_t packet_length) override;
 
-  // Implements VCMFrameTypeCallback.
-  int32_t RequestKeyFrame() override;
+  // Send an RTCP keyframe request.
+  void RequestKeyFrame();
 
   // Implements LossNotificationSender.
   void SendLossNotification(uint16_t last_decoded_seq_num,

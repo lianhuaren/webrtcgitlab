@@ -94,6 +94,7 @@ rtc_source_set("alr_detector") {
     "../../../logging:rtc_event_pacing",
     "../../../rtc_base:checks",
     "../../../rtc_base:safe_conversions",
+    "../../../rtc_base:timeutils",
     "../../../rtc_base/experiments:alr_experiment",
     "../../pacing:interval_budget",
     "//third_party/abseil-cpp/absl/memory",
@@ -182,7 +183,7 @@ rtc_source_set("probe_controller") {
     "../../../rtc_base/experiments:field_trial_parser",
     "../../../rtc_base/system:unused",
     "../../../system_wrappers:metrics",
-    "//third_party/abseil-cpp/absl/memory:memory",
+    "//third_party/abseil-cpp/absl/memory",
     "//third_party/abseil-cpp/absl/types:optional",
   ]
 }
@@ -205,7 +206,7 @@ if (rtc_include_tests) {
       "../../../api/units:timestamp",
       "../../../logging:rtc_event_log_api",
       "../../../rtc_base:checks",
-      "../../remote_bitrate_estimator:remote_bitrate_estimator",
+      "../../remote_bitrate_estimator",
       "//third_party/abseil-cpp/absl/types:optional",
     ]
   }

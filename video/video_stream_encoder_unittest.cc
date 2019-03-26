@@ -18,11 +18,12 @@
 #include "api/video/builtin_video_bitrate_allocator_factory.h"
 #include "api/video/i420_buffer.h"
 #include "api/video/video_bitrate_allocation.h"
-#include "api/video_codecs/create_vp8_temporal_layers.h"
 #include "api/video_codecs/vp8_temporal_layers.h"
+#include "api/video_codecs/vp8_temporal_layers_factory.h"
 #include "media/base/video_adapter.h"
 #include "modules/video_coding/codecs/vp9/include/vp9_globals.h"
 #include "modules/video_coding/utility/default_video_bitrate_allocator.h"
+#include "modules/video_coding/utility/simulcast_rate_allocator.h"
 #include "rtc_base/fake_clock.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/ref_counted_object.h"
@@ -407,6 +408,20 @@ class VideoStreamEncoderTest : public ::testing::Test {
     return frame;
   }
 
+  void VerifyAllocatedBitrate(const VideoBitrateAllocation& expected_bitrate) {
+    MockBitrateObserver bitrate_observer;
+    video_stream_encoder_->SetBitrateAllocationObserver(&bitrate_observer);
+
+    EXPECT_CALL(bitrate_observer, OnBitrateAllocationUpdated(expected_bitrate))
+        .Times(1);
+    video_stream_encoder_->OnBitrateUpdated(DataRate::bps(kTargetBitrateBps),
+                                            DataRate::Zero(), 0, 0);
+
+    video_source_.IncomingCapturedFrame(
+        CreateFrame(1, codec_width_, codec_height_));
+    WaitForEncodedFrame(1);
+  }
+
   void VerifyNoLimitation(const rtc::VideoSinkWants& wants) {
     EXPECT_EQ(std::numeric_limits<int>::max(), wants.max_framerate_fps);
     EXPECT_EQ(std::numeric_limits<int>::max(), wants.max_pixel_count);
@@ -555,6 +570,12 @@ class VideoStreamEncoderTest : public ::testing::Test {
               VideoEncoder::ScalingSettings(1, 2, kMinPixelsPerFrame);
         }
         info.is_hardware_accelerated = is_hardware_accelerated_;
+        for (int i = 0; i < kMaxSpatialLayers; ++i) {
+          if (temporal_layers_supported_[i]) {
+            int num_layers = temporal_layers_supported_[i].value() ? 2 : 1;
+            info.fps_allocation[i].resize(num_layers);
+          }
+        }
       }
       return info;
     }
@@ -585,6 +606,12 @@ class VideoStreamEncoderTest : public ::testing::Test {
       is_hardware_accelerated_ = is_hardware_accelerated;
     }
 
+    void SetTemporalLayersSupported(size_t spatial_idx, bool supported) {
+      RTC_DCHECK_LT(spatial_idx, kMaxSpatialLayers);
+      rtc::CritScope lock(&local_crit_sect_);
+      temporal_layers_supported_[spatial_idx] = supported;
+    }
+
     void ForceInitEncodeFailure(bool force_failure) {
       rtc::CritScope lock(&local_crit_sect_);
       force_init_encode_failed_ = force_failure;
@@ -612,7 +639,8 @@ class VideoStreamEncoderTest : public ::testing::Test {
 
     void InjectFrame(const VideoFrame& input_image, bool keyframe) {
       const std::vector<VideoFrameType> frame_type = {
-          keyframe ? kVideoFrameKey : kVideoFrameDelta};
+          keyframe ? VideoFrameType::kVideoFrameKey
+                   : VideoFrameType::kVideoFrameDelta};
       {
         rtc::CritScope lock(&local_crit_sect_);
         last_frame_types_ = frame_type;
@@ -678,12 +706,8 @@ class VideoStreamEncoderTest : public ::testing::Test {
       if (config->codecType == kVideoCodecVP8) {
         // Simulate setting up temporal layers, in order to validate the life
         // cycle of these objects.
-        int num_streams = std::max<int>(1, config->numberOfSimulcastStreams);
-        for (int i = 0; i < num_streams; ++i) {
-          allocated_temporal_layers_.emplace_back(
-              CreateVp8TemporalLayers(Vp8TemporalLayersType::kFixedPattern,
-                                      config->VP8().numberOfTemporalLayers));
-        }
+        Vp8TemporalLayersFactory factory;
+        frame_buffer_controller_ = factory.Create(*config);
       }
       if (force_init_encode_failed_) {
         initialized_ = EncoderState::kInitializationFailed;
@@ -736,8 +760,11 @@ class VideoStreamEncoderTest : public ::testing::Test {
     int last_input_height_ RTC_GUARDED_BY(local_crit_sect_) = 0;
     bool quality_scaling_ RTC_GUARDED_BY(local_crit_sect_) = true;
     bool is_hardware_accelerated_ RTC_GUARDED_BY(local_crit_sect_) = false;
-    std::vector<std::unique_ptr<Vp8TemporalLayers>> allocated_temporal_layers_
+    std::unique_ptr<Vp8FrameBufferController> frame_buffer_controller_
         RTC_GUARDED_BY(local_crit_sect_);
+    absl::optional<bool>
+        temporal_layers_supported_[kMaxSpatialLayers] RTC_GUARDED_BY(
+            local_crit_sect_);
     bool force_init_encode_failed_ RTC_GUARDED_BY(local_crit_sect_) = false;
     double rate_factor_ RTC_GUARDED_BY(local_crit_sect_) = 1.0;
     uint32_t last_framerate_ RTC_GUARDED_BY(local_crit_sect_) = 0;
@@ -2329,6 +2356,65 @@ TEST_F(VideoStreamEncoderTest, CallsBitrateObserver) {
   video_stream_encoder_->Stop();
 }
 
+TEST_F(VideoStreamEncoderTest, TemporalLayersNotDisabledIfSupported) {
+  // 2 TLs configured, temporal layers supported by encoder.
+  const int kNumTemporalLayers = 2;
+  ResetEncoder("VP8", 1, kNumTemporalLayers, 1, /*screenshare*/ false);
+  fake_encoder_.SetTemporalLayersSupported(0, true);
+
+  // Bitrate allocated across temporal layers.
+  const int kTl0Bps = kTargetBitrateBps *
+                      webrtc::SimulcastRateAllocator::GetTemporalRateAllocation(
+                          kNumTemporalLayers, /*temporal_id*/ 0);
+  const int kTl1Bps = kTargetBitrateBps *
+                      webrtc::SimulcastRateAllocator::GetTemporalRateAllocation(
+                          kNumTemporalLayers, /*temporal_id*/ 1);
+  VideoBitrateAllocation expected_bitrate;
+  expected_bitrate.SetBitrate(/*si*/ 0, /*ti*/ 0, kTl0Bps);
+  expected_bitrate.SetBitrate(/*si*/ 0, /*ti*/ 1, kTl1Bps - kTl0Bps);
+
+  VerifyAllocatedBitrate(expected_bitrate);
+  video_stream_encoder_->Stop();
+}
+
+TEST_F(VideoStreamEncoderTest, TemporalLayersDisabledIfNotSupported) {
+  // 2 TLs configured, temporal layers not supported by encoder.
+  ResetEncoder("VP8", 1, /*num_temporal_layers*/ 2, 1, /*screenshare*/ false);
+  fake_encoder_.SetTemporalLayersSupported(0, false);
+
+  // Temporal layers not supported by the encoder.
+  // Total bitrate should be at ti:0.
+  VideoBitrateAllocation expected_bitrate;
+  expected_bitrate.SetBitrate(/*si*/ 0, /*ti*/ 0, kTargetBitrateBps);
+
+  VerifyAllocatedBitrate(expected_bitrate);
+  video_stream_encoder_->Stop();
+}
+
+TEST_F(VideoStreamEncoderTest, VerifyBitrateAllocationForTwoStreams) {
+  // 2 TLs configured, temporal layers only supported for first stream.
+  ResetEncoder("VP8", 2, /*num_temporal_layers*/ 2, 1, /*screenshare*/ false);
+  fake_encoder_.SetTemporalLayersSupported(0, true);
+  fake_encoder_.SetTemporalLayersSupported(1, false);
+
+  const int kS0Bps = 150000;
+  const int kS0Tl0Bps =
+      kS0Bps * webrtc::SimulcastRateAllocator::GetTemporalRateAllocation(
+                   /*num_layers*/ 2, /*temporal_id*/ 0);
+  const int kS0Tl1Bps =
+      kS0Bps * webrtc::SimulcastRateAllocator::GetTemporalRateAllocation(
+                   /*num_layers*/ 2, /*temporal_id*/ 1);
+  const int kS1Bps = kTargetBitrateBps - kS0Tl1Bps;
+  // Temporal layers not supported by si:1.
+  VideoBitrateAllocation expected_bitrate;
+  expected_bitrate.SetBitrate(/*si*/ 0, /*ti*/ 0, kS0Tl0Bps);
+  expected_bitrate.SetBitrate(/*si*/ 0, /*ti*/ 1, kS0Tl1Bps - kS0Tl0Bps);
+  expected_bitrate.SetBitrate(/*si*/ 1, /*ti*/ 0, kS1Bps);
+
+  VerifyAllocatedBitrate(expected_bitrate);
+  video_stream_encoder_->Stop();
+}
+
 TEST_F(VideoStreamEncoderTest, OveruseDetectorUpdatedOnReconfigureAndAdaption) {
   const int kFrameWidth = 1280;
   const int kFrameHeight = 720;
@@ -3601,21 +3687,24 @@ TEST_F(VideoStreamEncoderTest, SetsFrameTypes) {
   // First frame is always keyframe.
   video_source_.IncomingCapturedFrame(CreateFrame(1, nullptr));
   WaitForEncodedFrame(1);
-  EXPECT_THAT(fake_encoder_.LastFrameTypes(),
-              testing::ElementsAre(VideoFrameType{kVideoFrameKey}));
+  EXPECT_THAT(
+      fake_encoder_.LastFrameTypes(),
+      testing::ElementsAre(VideoFrameType{VideoFrameType::kVideoFrameKey}));
 
   // Insert delta frame.
   video_source_.IncomingCapturedFrame(CreateFrame(2, nullptr));
   WaitForEncodedFrame(2);
-  EXPECT_THAT(fake_encoder_.LastFrameTypes(),
-              testing::ElementsAre(VideoFrameType{kVideoFrameDelta}));
+  EXPECT_THAT(
+      fake_encoder_.LastFrameTypes(),
+      testing::ElementsAre(VideoFrameType{VideoFrameType::kVideoFrameDelta}));
 
   // Request next frame be a key-frame.
   video_stream_encoder_->SendKeyFrame();
   video_source_.IncomingCapturedFrame(CreateFrame(3, nullptr));
   WaitForEncodedFrame(3);
-  EXPECT_THAT(fake_encoder_.LastFrameTypes(),
-              testing::ElementsAre(VideoFrameType{kVideoFrameKey}));
+  EXPECT_THAT(
+      fake_encoder_.LastFrameTypes(),
+      testing::ElementsAre(VideoFrameType{VideoFrameType::kVideoFrameKey}));
 
   video_stream_encoder_->Stop();
 }
@@ -3632,15 +3721,17 @@ TEST_F(VideoStreamEncoderTest, SetsFrameTypesSimulcast) {
   video_source_.IncomingCapturedFrame(CreateFrame(1, nullptr));
   WaitForEncodedFrame(1);
   EXPECT_THAT(fake_encoder_.LastFrameTypes(),
-              testing::ElementsAreArray(
-                  {kVideoFrameKey, kVideoFrameKey, kVideoFrameKey}));
+              testing::ElementsAreArray({VideoFrameType::kVideoFrameKey,
+                                         VideoFrameType::kVideoFrameKey,
+                                         VideoFrameType::kVideoFrameKey}));
 
   // Insert delta frame.
   video_source_.IncomingCapturedFrame(CreateFrame(2, nullptr));
   WaitForEncodedFrame(2);
   EXPECT_THAT(fake_encoder_.LastFrameTypes(),
-              testing::ElementsAreArray(
-                  {kVideoFrameDelta, kVideoFrameDelta, kVideoFrameDelta}));
+              testing::ElementsAreArray({VideoFrameType::kVideoFrameDelta,
+                                         VideoFrameType::kVideoFrameDelta,
+                                         VideoFrameType::kVideoFrameDelta}));
 
   // Request next frame be a key-frame.
   // Only first stream is configured to produce key-frame.
@@ -3648,8 +3739,9 @@ TEST_F(VideoStreamEncoderTest, SetsFrameTypesSimulcast) {
   video_source_.IncomingCapturedFrame(CreateFrame(3, nullptr));
   WaitForEncodedFrame(3);
   EXPECT_THAT(fake_encoder_.LastFrameTypes(),
-              testing::ElementsAreArray(
-                  {kVideoFrameKey, kVideoFrameDelta, kVideoFrameDelta}));
+              testing::ElementsAreArray({VideoFrameType::kVideoFrameKey,
+                                         VideoFrameType::kVideoFrameDelta,
+                                         VideoFrameType::kVideoFrameDelta}));
 
   video_stream_encoder_->Stop();
 }
@@ -3665,24 +3757,28 @@ TEST_F(VideoStreamEncoderTest, RequestKeyframeInternalSource) {
   // callback in VideoStreamEncoder is called despite no OnFrame().
   fake_encoder_.InjectFrame(CreateFrame(1, nullptr), true);
   EXPECT_TRUE(WaitForFrame(kDefaultTimeoutMs));
-  EXPECT_THAT(fake_encoder_.LastFrameTypes(),
-              testing::ElementsAre(VideoFrameType{kVideoFrameKey}));
+  EXPECT_THAT(
+      fake_encoder_.LastFrameTypes(),
+      testing::ElementsAre(VideoFrameType{VideoFrameType::kVideoFrameKey}));
 
-  const std::vector<VideoFrameType> kDeltaFrame = {kVideoFrameDelta};
+  const std::vector<VideoFrameType> kDeltaFrame = {
+      VideoFrameType::kVideoFrameDelta};
   // Need to set timestamp manually since manually for injected frame.
   VideoFrame frame = CreateFrame(101, nullptr);
   frame.set_timestamp(101);
   fake_encoder_.InjectFrame(frame, false);
   EXPECT_TRUE(WaitForFrame(kDefaultTimeoutMs));
-  EXPECT_THAT(fake_encoder_.LastFrameTypes(),
-              testing::ElementsAre(VideoFrameType{kVideoFrameDelta}));
+  EXPECT_THAT(
+      fake_encoder_.LastFrameTypes(),
+      testing::ElementsAre(VideoFrameType{VideoFrameType::kVideoFrameDelta}));
 
   // Request key-frame. The forces a dummy frame down into the encoder.
   fake_encoder_.ExpectNullFrame();
   video_stream_encoder_->SendKeyFrame();
   EXPECT_TRUE(WaitForFrame(kDefaultTimeoutMs));
-  EXPECT_THAT(fake_encoder_.LastFrameTypes(),
-              testing::ElementsAre(VideoFrameType{kVideoFrameKey}));
+  EXPECT_THAT(
+      fake_encoder_.LastFrameTypes(),
+      testing::ElementsAre(VideoFrameType{VideoFrameType::kVideoFrameKey}));
 
   video_stream_encoder_->Stop();
 }

@@ -27,19 +27,12 @@
 #include "test/testsupport/copy_to_file_audio_capturer.h"
 
 namespace webrtc {
-namespace test {
+namespace webrtc_pc_e2e {
 namespace {
 
 constexpr int16_t kGeneratedAudioMaxAmplitude = 32000;
 constexpr int kSamplingFrequencyInHz = 48000;
 
-using Params = PeerConnectionE2EQualityTestFixture::Params;
-using InjectableComponents =
-    PeerConnectionE2EQualityTestFixture::InjectableComponents;
-using PeerConnectionFactoryComponents =
-    PeerConnectionE2EQualityTestFixture::PeerConnectionFactoryComponents;
-using PeerConnectionComponents =
-    PeerConnectionE2EQualityTestFixture::PeerConnectionComponents;
 using AudioConfig = PeerConnectionE2EQualityTestFixture::AudioConfig;
 
 // Sets mandatory entities in injectable components like |pcf_dependencies|
@@ -91,7 +84,7 @@ rtc::scoped_refptr<AudioDeviceModule> CreateAudioDeviceModule(
   RTC_DCHECK(capturer);
 
   if (audio_config && audio_config->input_dump_file_name) {
-    capturer = absl::make_unique<CopyToFileAudioCapturer>(
+    capturer = absl::make_unique<test::CopyToFileAudioCapturer>(
         std::move(capturer), audio_config->input_dump_file_name.value());
   }
 
@@ -200,7 +193,7 @@ PeerConnectionFactoryDependencies CreatePCFDependencies(
 // Creates PeerConnectionDependencies objects, providing entities
 // from InjectableComponents::PeerConnectionComponents.
 PeerConnectionDependencies CreatePCDependencies(
-    PeerConnectionComponents* pc_dependencies,
+    std::unique_ptr<PeerConnectionComponents> pc_dependencies,
     PeerConnectionObserver* observer) {
   PeerConnectionDependencies pc_deps(observer);
 
@@ -262,8 +255,8 @@ std::unique_ptr<TestPeer> TestPeer::CreateTestPeer(
       CreateModularPeerConnectionFactory(std::move(pcf_deps));
 
   // Create peer connection.
-  PeerConnectionDependencies pc_deps =
-      CreatePCDependencies(components->pc_dependencies.get(), observer.get());
+  PeerConnectionDependencies pc_deps = CreatePCDependencies(
+      std::move(components->pc_dependencies), observer.get());
   rtc::scoped_refptr<PeerConnectionInterface> pc =
       pcf->CreatePeerConnection(params->rtc_configuration, std::move(pc_deps));
 
@@ -297,5 +290,5 @@ TestPeer::TestPeer(
                                                    std::move(observer)),
       params_(std::move(params)) {}
 
-}  // namespace test
+}  // namespace webrtc_pc_e2e
 }  // namespace webrtc

@@ -104,7 +104,7 @@ static const char kStunAddressOnly[] = "stun:address";
 static const char kStunInvalidPort[] = "stun:address:-1";
 static const char kStunAddressPortAndMore1[] = "stun:address:port:more";
 static const char kStunAddressPortAndMore2[] = "stun:address:port more";
-static const char kTurnIceServerUri[] = "turn:user@turn.example.org";
+static const char kTurnIceServerUri[] = "turn:turn.example.org";
 static const char kTurnUsername[] = "user";
 static const char kTurnPassword[] = "password";
 static const char kTurnHostname[] = "turn.example.org";
@@ -639,41 +639,30 @@ class PeerConnectionFactoryForTest : public webrtc::PeerConnectionFactory {
     auto video_encoder_factory = webrtc::CreateBuiltinVideoEncoderFactory();
     auto video_decoder_factory = webrtc::CreateBuiltinVideoDecoderFactory();
 
+    PeerConnectionFactoryDependencies dependencies;
+    dependencies.worker_thread = rtc::Thread::Current();
+    dependencies.network_thread = rtc::Thread::Current();
+    dependencies.signaling_thread = rtc::Thread::Current();
+
     // Use fake audio device module since we're only testing the interface
     // level, and using a real one could make tests flaky when run in parallel.
-    auto media_engine = std::unique_ptr<cricket::MediaEngineInterface>(
+    dependencies.media_engine = std::unique_ptr<cricket::MediaEngineInterface>(
         cricket::WebRtcMediaEngineFactory::Create(
             FakeAudioCaptureModule::Create(), audio_encoder_factory,
             audio_decoder_factory, std::move(video_encoder_factory),
             std::move(video_decoder_factory), nullptr,
             webrtc::AudioProcessingBuilder().Create()));
 
-    std::unique_ptr<webrtc::CallFactoryInterface> call_factory =
-        webrtc::CreateCallFactory();
-
-    std::unique_ptr<webrtc::RtcEventLogFactoryInterface> event_log_factory =
-        webrtc::CreateRtcEventLogFactory();
+    dependencies.call_factory = webrtc::CreateCallFactory();
+    dependencies.event_log_factory = webrtc::CreateRtcEventLogFactory();
 
     return new rtc::RefCountedObject<PeerConnectionFactoryForTest>(
-        rtc::Thread::Current(), rtc::Thread::Current(), rtc::Thread::Current(),
-        std::move(media_engine), std::move(call_factory),
-        std::move(event_log_factory));
+        std::move(dependencies));
   }
 
-  PeerConnectionFactoryForTest(
-      rtc::Thread* network_thread,
-      rtc::Thread* worker_thread,
-      rtc::Thread* signaling_thread,
-      std::unique_ptr<cricket::MediaEngineInterface> media_engine,
-      std::unique_ptr<webrtc::CallFactoryInterface> call_factory,
-      std::unique_ptr<webrtc::RtcEventLogFactoryInterface> event_log_factory)
-      : webrtc::PeerConnectionFactory(network_thread,
-                                      worker_thread,
-                                      signaling_thread,
-                                      std::move(media_engine),
-                                      std::move(call_factory),
-                                      std::move(event_log_factory)) {}
+  using PeerConnectionFactory::PeerConnectionFactory;
 
+ private:
   rtc::scoped_refptr<FakeAudioCaptureModule> fake_audio_capture_module_;
 };
 
@@ -729,10 +718,12 @@ class PeerConnectionInterfaceBaseTest : public testing::Test {
   }
 
   void CreatePeerConnectionWithIceServer(const std::string& uri,
+                                         const std::string& username,
                                          const std::string& password) {
     PeerConnectionInterface::RTCConfiguration config;
     PeerConnectionInterface::IceServer server;
     server.uri = uri;
+    server.username = username;
     server.password = password;
     config.servers.push_back(server);
     CreatePeerConnection(config);
@@ -785,7 +776,7 @@ class PeerConnectionInterfaceBaseTest : public testing::Test {
   }
 
   void CreatePeerConnectionWithDifferentConfigurations() {
-    CreatePeerConnectionWithIceServer(kStunAddressOnly, "");
+    CreatePeerConnectionWithIceServer(kStunAddressOnly, "", "");
     EXPECT_EQ(1u, port_allocator_->stun_servers().size());
     EXPECT_EQ(0u, port_allocator_->turn_servers().size());
     EXPECT_EQ("address", port_allocator_->stun_servers().begin()->hostname());
@@ -796,7 +787,8 @@ class PeerConnectionInterfaceBaseTest : public testing::Test {
     CreatePeerConnectionExpectFail(kStunAddressPortAndMore1);
     CreatePeerConnectionExpectFail(kStunAddressPortAndMore2);
 
-    CreatePeerConnectionWithIceServer(kTurnIceServerUri, kTurnPassword);
+    CreatePeerConnectionWithIceServer(kTurnIceServerUri, kTurnUsername,
+                                      kTurnPassword);
     EXPECT_EQ(0u, port_allocator_->stun_servers().size());
     EXPECT_EQ(1u, port_allocator_->turn_servers().size());
     EXPECT_EQ(kTurnUsername,

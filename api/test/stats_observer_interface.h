@@ -8,15 +8,16 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#ifndef TEST_PC_E2E_API_STATS_OBSERVER_INTERFACE_H_
-#define TEST_PC_E2E_API_STATS_OBSERVER_INTERFACE_H_
+#ifndef API_TEST_STATS_OBSERVER_INTERFACE_H_
+#define API_TEST_STATS_OBSERVER_INTERFACE_H_
 
 #include "absl/strings/string_view.h"
 #include "api/stats_types.h"
 
 namespace webrtc {
-namespace test {
+namespace webrtc_pc_e2e {
 
+// API is in development and can be changed without notice.
 class StatsObserverInterface {
  public:
   virtual ~StatsObserverInterface() = default;
@@ -27,7 +28,7 @@ class StatsObserverInterface {
                               const StatsReports& reports) = 0;
 };
 
-}  // namespace test
+}  // namespace webrtc_pc_e2e
 }  // namespace webrtc
 
-#endif  // TEST_PC_E2E_API_STATS_OBSERVER_INTERFACE_H_
+#endif  // API_TEST_STATS_OBSERVER_INTERFACE_H_

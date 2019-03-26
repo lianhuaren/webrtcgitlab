@@ -82,7 +82,6 @@ class VideoReceiver : public Module {
   int32_t IncomingPacket(const uint8_t* incomingPayload,
                          size_t payloadLength,
                          const WebRtcRTPHeader& rtpInfo);
-  int32_t SetMinimumPlayoutDelay(uint32_t minPlayoutDelayMs);
   int32_t SetRenderDelay(uint32_t timeMS);
   int32_t Delay() const;
 
@@ -133,7 +132,6 @@ class VideoReceiver : public Module {
   // These callbacks are set on the construction thread before being attached
   // to the module thread or decoding started, so a lock is not required.
   VCMFrameTypeCallback* _frameTypeCallback;
-  VCMReceiveStatisticsCallback* _receiveStatsCallback;
   VCMPacketRequestCallback* _packetRequestCallback;
 
   // Used on both the module and decoder thread.

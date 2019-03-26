@@ -54,7 +54,6 @@ VideoReceiver::VideoReceiver(Clock* clock,
                 keyframe_request_sender),
       _decodedFrameCallback(_timing, clock_),
       _frameTypeCallback(nullptr),
-      _receiveStatsCallback(nullptr),
       _packetRequestCallback(nullptr),
       _scheduleKeyRequest(false),
       drop_frames_until_keyframe_(false),
@@ -79,9 +78,6 @@ void VideoReceiver::Process() {
   //                 ReceiveStatisticsProxy::QualitySample.
   if (_receiveStatsTimer.TimeUntilProcess() == 0) {
     _receiveStatsTimer.Processed();
-    if (_receiveStatsCallback != nullptr) {
-      _receiveStatsCallback->OnReceiveRatesUpdated(0, 0);
-    }
   }
 
   // Key frame requests
@@ -200,9 +196,8 @@ int32_t VideoReceiver::RegisterReceiveStatisticsCallback(
   // |_receiver| is used on both the decoder and module threads.
   // However, since we make sure that we never do anything on the module thread
   // when the decoder thread is not running, we don't need a lock for the
-  // |_receiver| or |_receiveStatsCallback| here.
+  // |_receiver| here.
   _receiver.RegisterStatsCallback(receiveStats);
-  _receiveStatsCallback = receiveStats;
   return VCM_OK;
 }
 
@@ -288,7 +283,7 @@ int32_t VideoReceiver::Decode(uint16_t maxWaitTimeMs) {
     if (drop_frames_until_keyframe_) {
       // Still getting delta frames, schedule another keyframe request as if
       // decode failed.
-      if (frame->FrameType() != kVideoFrameKey) {
+      if (frame->FrameType() != VideoFrameType::kVideoFrameKey) {
         drop_frame = true;
         _scheduleKeyRequest = true;
         // TODO(tommi): Consider if we could instead post a task to the module
@@ -384,7 +379,7 @@ int32_t VideoReceiver::IncomingPacket(const uint8_t* incomingPayload,
                                       size_t payloadLength,
                                       const WebRtcRTPHeader& rtpInfo) {
   RTC_DCHECK_RUN_ON(&module_thread_checker_);
-  if (rtpInfo.frameType == kVideoFrameKey) {
+  if (rtpInfo.frameType == VideoFrameType::kVideoFrameKey) {
     TRACE_EVENT1("webrtc", "VCM::PacketKeyFrame", "seqnum",
                  rtpInfo.header.sequenceNumber);
   }
@@ -410,15 +405,6 @@ int32_t VideoReceiver::IncomingPacket(const uint8_t* incomingPayload,
   } else if (ret < 0) {
     return ret;
   }
-  return VCM_OK;
-}
-
-// Minimum playout delay (used for lip-sync). This is the minimum delay required
-// to sync with audio. Not included in  VideoCodingModule::Delay()
-// Defaults to 0 ms.
-int32_t VideoReceiver::SetMinimumPlayoutDelay(uint32_t minPlayoutDelayMs) {
-  RTC_DCHECK_RUN_ON(&module_thread_checker_);
-  _timing->set_min_playout_delay(minPlayoutDelayMs);
   return VCM_OK;
 }
 

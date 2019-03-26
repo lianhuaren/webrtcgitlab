@@ -332,11 +332,11 @@ void VideoCodecTestFixtureImpl::H264KeyframeChecker::CheckEncodedFrame(
       contains_idr = true;
     }
   }
-  if (encoded_frame._frameType == kVideoFrameKey) {
+  if (encoded_frame._frameType == VideoFrameType::kVideoFrameKey) {
     EXPECT_TRUE(contains_sps) << "Keyframe should contain SPS.";
     EXPECT_TRUE(contains_pps) << "Keyframe should contain PPS.";
     EXPECT_TRUE(contains_idr) << "Keyframe should contain IDR.";
-  } else if (encoded_frame._frameType == kVideoFrameDelta) {
+  } else if (encoded_frame._frameType == VideoFrameType::kVideoFrameDelta) {
     EXPECT_FALSE(contains_sps) << "Delta frame should not contain SPS.";
     EXPECT_FALSE(contains_pps) << "Delta frame should not contain PPS.";
     EXPECT_FALSE(contains_idr) << "Delta frame should not contain IDR.";
@@ -405,7 +405,7 @@ void VideoCodecTestFixtureImpl::RunTest(
 
   // To emulate operation on a production VideoStreamEncoder, we call the
   // codecs on a task queue.
-  rtc::test::TaskQueueForTest task_queue("VidProc TQ");
+  TaskQueueForTest task_queue("VidProc TQ");
 
   SetUpAndInitObjects(&task_queue,
                       static_cast<const int>(rate_profiles[0].target_kbps),
@@ -475,6 +475,11 @@ void VideoCodecTestFixtureImpl::AnalyzeAllFrames(
             : config_.num_frames - 1;
     RTC_CHECK(last_frame_num >= first_frame_num);
 
+    VideoStatistics send_stat = stats_.SliceAndCalcAggregatedVideoStatistic(
+        first_frame_num, last_frame_num);
+    printf("==> Send stats\n");
+    printf("%s\n\n", send_stat.ToString("send_").c_str());
+
     std::vector<VideoStatistics> layer_stats =
         stats_.SliceAndCalcLayerVideoStatistic(first_frame_num, last_frame_num);
     printf("==> Receive stats\n");
@@ -484,36 +489,37 @@ void VideoCodecTestFixtureImpl::AnalyzeAllFrames(
       // For perf dashboard.
       char modifier_buf[256];
       rtc::SimpleStringBuilder modifier(modifier_buf);
-      modifier << "_sl" << layer_stat.spatial_idx << "tl"
-               << layer_stat.temporal_idx;
-      PrintResult("enc_speed", modifier.str(), config_.test_name,
-                  layer_stat.enc_speed_fps, "fps", /*important=*/false);
-      PrintResult("dec_speed", modifier.str(), config_.test_name,
-                  layer_stat.dec_speed_fps, "fps", /*important=*/false);
-      PrintResult("avg_key_frame_size", modifier.str(), config_.test_name,
-                  layer_stat.avg_key_frame_size_bytes, "bytes",
-                  /*important=*/false);
-      PrintResult("avg_delta_frame_size", modifier.str(), config_.test_name,
-                  layer_stat.avg_delta_frame_size_bytes, "bytes",
-                  /*important=*/false);
-      PrintResult("avg_qp", modifier.str(), config_.test_name,
-                  layer_stat.avg_qp, "", /*important=*/false);
-      PrintResult("avg_psnr_y", modifier.str(), config_.test_name,
-                  layer_stat.avg_psnr_y, "dB", /*important=*/false);
-      PrintResult("min_psnr", modifier.str(), config_.test_name,
-                  layer_stat.min_psnr, "dB", /*important=*/false);
-      PrintResult("num_dropped_frames", modifier.str(), config_.test_name,
-                  layer_stat.num_input_frames - layer_stat.num_encoded_frames,
-                  "frames", /*important=*/false);
-      PrintResult("num_key_frames", modifier.str(), config_.test_name,
-                  layer_stat.num_key_frames, "frames", /*important=*/false);
+      modifier << "_r" << rate_profile_idx << "_sl" << layer_stat.spatial_idx;
+
+      auto PrintResultHelper = [&modifier, this](const std::string& measurement,
+                                                 double value,
+                                                 const std::string& units) {
+        PrintResult(measurement, modifier.str(), config_.test_name, value,
+                    units, /*important=*/false);
+      };
+
+      if (layer_stat.temporal_idx == config_.NumberOfTemporalLayers() - 1) {
+        PrintResultHelper("enc_speed", layer_stat.enc_speed_fps, "fps");
+        PrintResultHelper("avg_key_frame_size",
+                          layer_stat.avg_key_frame_size_bytes, "bytes");
+        PrintResultHelper("num_key_frames", layer_stat.num_key_frames,
+                          "frames");
+        printf("\n");
+      }
+
+      modifier << "tl" << layer_stat.temporal_idx;
+      PrintResultHelper("dec_speed", layer_stat.dec_speed_fps, "fps");
+      PrintResultHelper("avg_delta_frame_size",
+                        layer_stat.avg_delta_frame_size_bytes, "bytes");
+      PrintResultHelper("bitrate", layer_stat.bitrate_kbps, "kbps");
+      PrintResultHelper("framerate", layer_stat.framerate_fps, "fps");
+      PrintResultHelper("avg_psnr_y", layer_stat.avg_psnr_y, "dB");
+      PrintResultHelper("avg_psnr_u", layer_stat.avg_psnr_u, "dB");
+      PrintResultHelper("avg_psnr_v", layer_stat.avg_psnr_v, "dB");
+      PrintResultHelper("min_psnr_yuv", layer_stat.min_psnr, "dB");
+      PrintResultHelper("avg_qp", layer_stat.avg_qp, "");
       printf("\n");
     }
-
-    VideoStatistics send_stat = stats_.SliceAndCalcAggregatedVideoStatistic(
-        first_frame_num, last_frame_num);
-    printf("==> Send stats\n");
-    printf("%s\n", send_stat.ToString("send_").c_str());
 
     const RateControlThresholds* rc_threshold =
         rc_thresholds ? &(*rc_thresholds)[rate_profile_idx] : nullptr;
@@ -625,7 +631,7 @@ VideoCodecTestStats& VideoCodecTestFixtureImpl::GetStats() {
 }
 
 void VideoCodecTestFixtureImpl::SetUpAndInitObjects(
-    rtc::test::TaskQueueForTest* task_queue,
+    TaskQueueForTest* task_queue,
     int initial_bitrate_kbps,
     int initial_framerate_fps) {
   config_.codec_settings.minBitrate = 0;
@@ -642,18 +648,26 @@ void VideoCodecTestFixtureImpl::SetUpAndInitObjects(
   RTC_DCHECK(decoded_frame_writers_.empty());
   const size_t num_simulcast_or_spatial_layers = std::max(
       config_.NumberOfSimulcastStreams(), config_.NumberOfSpatialLayers());
+  const size_t num_temporal_layers = config_.NumberOfTemporalLayers();
   for (size_t simulcast_svc_idx = 0;
        simulcast_svc_idx < num_simulcast_or_spatial_layers;
        ++simulcast_svc_idx) {
-    const std::string output_filename_base = OutputPath() +
-                                             FilenameWithParams(config_) + "_" +
-                                             std::to_string(simulcast_svc_idx);
+    const std::string output_filename_base =
+        OutputPath() + FilenameWithParams(config_) + "_sl" +
+        std::to_string(simulcast_svc_idx);
 
     if (config_.visualization_params.save_encoded_ivf) {
-      FileWrapper post_encode_file =
-          FileWrapper::OpenWriteOnly(output_filename_base + ".ivf");
-      encoded_frame_writers_.push_back(
-          IvfFileWriter::Wrap(std::move(post_encode_file), 0));
+      for (size_t temporal_idx = 0; temporal_idx < num_temporal_layers;
+           ++temporal_idx) {
+        const std::string output_file_path =
+            output_filename_base + "tl" + std::to_string(temporal_idx) + ".ivf";
+        FileWrapper ivf_file = FileWrapper::OpenWriteOnly(output_file_path);
+
+        const VideoProcessor::LayerKey layer_key(simulcast_svc_idx,
+                                                 temporal_idx);
+        encoded_frame_writers_[layer_key] =
+            IvfFileWriter::Wrap(std::move(ivf_file), /*byte_limit=*/0);
+      }
     }
 
     if (config_.visualization_params.save_decoded_y4m) {
@@ -674,14 +688,13 @@ void VideoCodecTestFixtureImpl::SetUpAndInitObjects(
     CreateEncoderAndDecoder();
     processor_ = absl::make_unique<VideoProcessor>(
         encoder_.get(), &decoders_, source_frame_reader_.get(), config_,
-        &stats_,
-        encoded_frame_writers_.empty() ? nullptr : &encoded_frame_writers_,
+        &stats_, &encoded_frame_writers_,
         decoded_frame_writers_.empty() ? nullptr : &decoded_frame_writers_);
   });
 }
 
 void VideoCodecTestFixtureImpl::ReleaseAndCloseObjects(
-    rtc::test::TaskQueueForTest* task_queue) {
+    TaskQueueForTest* task_queue) {
   task_queue->SendTask([this]() {
     processor_.reset();
     // The VideoProcessor must be destroyed before the codecs.
@@ -692,7 +705,7 @@ void VideoCodecTestFixtureImpl::ReleaseAndCloseObjects(
 
   // Close visualization files.
   for (auto& encoded_frame_writer : encoded_frame_writers_) {
-    EXPECT_TRUE(encoded_frame_writer->Close());
+    EXPECT_TRUE(encoded_frame_writer.second->Close());
   }
   encoded_frame_writers_.clear();
   for (auto& decoded_frame_writer : decoded_frame_writers_) {
@@ -702,7 +715,7 @@ void VideoCodecTestFixtureImpl::ReleaseAndCloseObjects(
 }
 
 void VideoCodecTestFixtureImpl::PrintSettings(
-    rtc::test::TaskQueueForTest* task_queue) const {
+    TaskQueueForTest* task_queue) const {
   printf("==> Config\n");
   printf("%s\n", config_.ToString().c_str());
 

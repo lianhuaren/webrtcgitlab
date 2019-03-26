@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+#include "api/test/video_quality_analyzer_interface.h"
 #include "api/video/video_frame.h"
 #include "api/video_codecs/sdp_video_format.h"
 #include "api/video_codecs/video_codec.h"
@@ -24,10 +25,9 @@
 #include "rtc_base/critical_section.h"
 #include "test/pc/e2e/analyzer/video/encoded_image_data_injector.h"
 #include "test/pc/e2e/analyzer/video/id_generator.h"
-#include "test/pc/e2e/api/video_quality_analyzer_interface.h"
 
 namespace webrtc {
-namespace test {
+namespace webrtc_pc_e2e {
 
 // QualityAnalyzingVideoEncoder is used to wrap origin video encoder and inject
 // VideoQualityAnalyzerInterface before and after encoder.
@@ -178,7 +178,7 @@ class QualityAnalyzingVideoEncoderFactory : public VideoEncoderFactory {
   VideoQualityAnalyzerInterface* const analyzer_;
 };
 
-}  // namespace test
+}  // namespace webrtc_pc_e2e
 }  // namespace webrtc
 
 #endif  // TEST_PC_E2E_ANALYZER_VIDEO_QUALITY_ANALYZING_VIDEO_ENCODER_H_

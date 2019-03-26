@@ -19,6 +19,7 @@
 
 #include "absl/memory/memory.h"
 #include "absl/strings/string_view.h"
+#include "api/function_view.h"
 #include "api/transport/field_trial_based_config.h"
 #include "api/transport/goog_cc_factory.h"
 #include "call/audio_receive_stream.h"
@@ -54,7 +55,6 @@
 #include "modules/rtp_rtcp/source/rtp_utility.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/format_macros.h"
-#include "rtc_base/function_view.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/numerics/sequence_number_util.h"
 #include "rtc_base/rate_statistics.h"
@@ -140,10 +140,10 @@ absl::optional<uint32_t> EstimateRtpClockFrequency(
     int64_t end_time_us) {
   RTC_CHECK(packets.size() >= 2);
   SeqNumUnwrapper<uint32_t> unwrapper;
-  uint64_t first_rtp_timestamp =
+  int64_t first_rtp_timestamp =
       unwrapper.Unwrap(packets[0].rtp.header.timestamp);
   int64_t first_log_timestamp = packets[0].log_time_us();
-  uint64_t last_rtp_timestamp = first_rtp_timestamp;
+  int64_t last_rtp_timestamp = first_rtp_timestamp;
   int64_t last_log_timestamp = first_log_timestamp;
   for (size_t i = 1; i < packets.size(); i++) {
     if (packets[i].log_time_us() > end_time_us)

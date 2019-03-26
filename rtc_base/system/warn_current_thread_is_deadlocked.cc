@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2018 The WebRTC project authors. All Rights Reserved.
+ *  Copyright 2019 The WebRTC Project Authors. All rights reserved.
  *
  *  Use of this source code is governed by a BSD-style license
  *  that can be found in the LICENSE file in the root of the source
@@ -8,18 +8,16 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include <stddef.h>
-#include <stdint.h>
-#include <string>
+#include "rtc_base/system/warn_current_thread_is_deadlocked.h"
 
-#include "rtc_base/string_encode.h"
+#include "rtc_base/logging.h"
+#include "sdk/android/native_api/stacktrace/stacktrace.h"
 
 namespace webrtc {
 
-// Fuzz s_url_decode which is used in ice server parsing.
-void FuzzOneInput(const uint8_t* data, size_t size) {
-  std::string url(reinterpret_cast<const char*>(data), size);
-  rtc::s_url_decode(url);
+void WarnThatTheCurrentThreadIsProbablyDeadlocked() {
+  RTC_LOG(LS_WARNING) << "Probable deadlock:";
+  RTC_LOG(LS_WARNING) << StackTraceToString(GetStackTrace());
 }
 
 }  // namespace webrtc

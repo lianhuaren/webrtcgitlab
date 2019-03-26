@@ -875,7 +875,8 @@ PeerConnection::PeerConnection(PeerConnectionFactory* factory,
       rtcp_cname_(GenerateRtcpCname()),
       local_streams_(StreamCollection::Create()),
       remote_streams_(StreamCollection::Create()),
-      call_(std::move(call)) {}
+      call_(std::move(call)),
+      call_ptr_(call_.get()) {}
 
 PeerConnection::~PeerConnection() {
   TRACE_EVENT0("webrtc", "PeerConnection::~PeerConnection");
@@ -907,8 +908,10 @@ PeerConnection::~PeerConnection() {
   transport_controller_.reset();
 
   // port_allocator_ lives on the network thread and should be destroyed there.
-  network_thread()->Invoke<void>(RTC_FROM_HERE,
-                                 [this] { port_allocator_.reset(); });
+  network_thread()->Invoke<void>(RTC_FROM_HERE, [this] {
+    RTC_DCHECK_RUN_ON(network_thread());
+    port_allocator_.reset();
+  });
   // call_ and event_log_ must be destroyed on the worker thread.
   worker_thread()->Invoke<void>(RTC_FROM_HERE, [this] {
     RTC_DCHECK_RUN_ON(worker_thread());
@@ -977,12 +980,12 @@ bool PeerConnection::Initialize(
 
   // The port allocator lives on the network thread and should be initialized
   // there.
-  if (!network_thread()->Invoke<bool>(
+  const auto pa_result =
+      network_thread()->Invoke<InitializePortAllocatorResult>(
           RTC_FROM_HERE,
           rtc::Bind(&PeerConnection::InitializePortAllocator_n, this,
-                    stun_servers, turn_servers, configuration))) {
-    return false;
-  }
+                    stun_servers, turn_servers, configuration));
+
   // If initialization was successful, note if STUN or TURN servers
   // were supplied.
   if (!stun_servers.empty()) {
@@ -994,7 +997,7 @@ bool PeerConnection::Initialize(
 
   // Send information about IPv4/IPv6 status.
   PeerConnectionAddressFamilyCounter address_family;
-  if (port_allocator_flags_ & cricket::PORTALLOCATOR_ENABLE_IPV6) {
+  if (pa_result.enable_ipv6) {
     address_family = kPeerConnection_IPv6;
   } else {
     address_family = kPeerConnection_IPv4;
@@ -1616,6 +1619,7 @@ PeerConnection::CreateSender(
     rtc::scoped_refptr<MediaStreamTrackInterface> track,
     const std::vector<std::string>& stream_ids,
     const std::vector<RtpEncodingParameters>& send_encodings) {
+  RTC_DCHECK_RUN_ON(signaling_thread());
   rtc::scoped_refptr<RtpSenderProxyWithInternal<RtpSenderInternal>> sender;
   if (media_type == cricket::MEDIA_TYPE_AUDIO) {
     RTC_DCHECK(!track ||
@@ -1791,7 +1795,7 @@ bool PeerConnection::GetStats(StatsObserver* observer,
                               MediaStreamTrackInterface* track,
                               StatsOutputLevel level) {
   TRACE_EVENT0("webrtc", "PeerConnection::GetStats");
-  RTC_DCHECK(signaling_thread()->IsCurrent());
+  RTC_DCHECK_RUN_ON(signaling_thread());
   if (!observer) {
     RTC_LOG(LS_ERROR) << "GetStats - observer is NULL.";
     return false;
@@ -1812,6 +1816,7 @@ bool PeerConnection::GetStats(StatsObserver* observer,
 
 void PeerConnection::GetStats(RTCStatsCollectorCallback* callback) {
   TRACE_EVENT0("webrtc", "PeerConnection::GetStats");
+  RTC_DCHECK_RUN_ON(signaling_thread());
   RTC_DCHECK(stats_collector_);
   RTC_DCHECK(callback);
   stats_collector_->GetStatsReport(callback);
@@ -1821,6 +1826,7 @@ void PeerConnection::GetStats(
     rtc::scoped_refptr<RtpSenderInterface> selector,
     rtc::scoped_refptr<RTCStatsCollectorCallback> callback) {
   TRACE_EVENT0("webrtc", "PeerConnection::GetStats");
+  RTC_DCHECK_RUN_ON(signaling_thread());
   RTC_DCHECK(callback);
   RTC_DCHECK(stats_collector_);
   rtc::scoped_refptr<RtpSenderInternal> internal_sender;
@@ -1849,6 +1855,7 @@ void PeerConnection::GetStats(
     rtc::scoped_refptr<RtpReceiverInterface> selector,
     rtc::scoped_refptr<RTCStatsCollectorCallback> callback) {
   TRACE_EVENT0("webrtc", "PeerConnection::GetStats");
+  RTC_DCHECK_RUN_ON(signaling_thread());
   RTC_DCHECK(callback);
   RTC_DCHECK(stats_collector_);
   rtc::scoped_refptr<RtpReceiverInternal> internal_receiver;
@@ -3580,6 +3587,7 @@ RTCError PeerConnection::SetBitrate(const BitrateSettings& bitrate) {
     return worker_thread()->Invoke<RTCError>(
         RTC_FROM_HERE, [&]() { return SetBitrate(bitrate); });
   }
+  RTC_DCHECK_RUN_ON(worker_thread());
 
   const bool has_min = bitrate.min_bitrate_bps.has_value();
   const bool has_start = bitrate.start_bitrate_bps.has_value();
@@ -3619,17 +3627,22 @@ RTCError PeerConnection::SetBitrate(const BitrateSettings& bitrate) {
 void PeerConnection::SetBitrateAllocationStrategy(
     std::unique_ptr<rtc::BitrateAllocationStrategy>
         bitrate_allocation_strategy) {
-  rtc::Thread* worker_thread = factory_->worker_thread();
-  if (!worker_thread->IsCurrent()) {
-    rtc::BitrateAllocationStrategy* strategy_raw =
-        bitrate_allocation_strategy.release();
-    auto functor = [this, strategy_raw]() {
-      call_->SetBitrateAllocationStrategy(
-          absl::WrapUnique<rtc::BitrateAllocationStrategy>(strategy_raw));
+  if (!worker_thread()->IsCurrent()) {
+    // TODO(kwiberg): Use a lambda instead when C++14 makes it possible to
+    // move-capture values in lambdas.
+    struct Task {
+      PeerConnection* const pc;
+      std::unique_ptr<rtc::BitrateAllocationStrategy> strategy;
+      void operator()() {
+        RTC_DCHECK_RUN_ON(pc->worker_thread());
+        pc->call_->SetBitrateAllocationStrategy(std::move(strategy));
+      }
     };
-    worker_thread->Invoke<void>(RTC_FROM_HERE, functor);
+    worker_thread()->Invoke<void>(
+        RTC_FROM_HERE, Task{this, std::move(bitrate_allocation_strategy)});
     return;
   }
+  RTC_DCHECK_RUN_ON(worker_thread());
   RTC_DCHECK(call_.get());
   call_->SetBitrateAllocationStrategy(std::move(bitrate_allocation_strategy));
 }
@@ -5290,48 +5303,51 @@ DataChannel* PeerConnection::FindDataChannelBySid(int sid) const {
   return nullptr;
 }
 
-bool PeerConnection::InitializePortAllocator_n(
+PeerConnection::InitializePortAllocatorResult
+PeerConnection::InitializePortAllocator_n(
     const cricket::ServerAddresses& stun_servers,
     const std::vector<cricket::RelayServerConfig>& turn_servers,
     const RTCConfiguration& configuration) {
+  RTC_DCHECK_RUN_ON(network_thread());
+
   port_allocator_->Initialize();
   // To handle both internal and externally created port allocator, we will
   // enable BUNDLE here.
-  port_allocator_flags_ = port_allocator_->flags();
-  port_allocator_flags_ |= cricket::PORTALLOCATOR_ENABLE_SHARED_SOCKET |
-                           cricket::PORTALLOCATOR_ENABLE_IPV6 |
-                           cricket::PORTALLOCATOR_ENABLE_IPV6_ON_WIFI;
+  int port_allocator_flags = port_allocator_->flags();
+  port_allocator_flags |= cricket::PORTALLOCATOR_ENABLE_SHARED_SOCKET |
+                          cricket::PORTALLOCATOR_ENABLE_IPV6 |
+                          cricket::PORTALLOCATOR_ENABLE_IPV6_ON_WIFI;
   // If the disable-IPv6 flag was specified, we'll not override it
   // by experiment.
   if (configuration.disable_ipv6) {
-    port_allocator_flags_ &= ~(cricket::PORTALLOCATOR_ENABLE_IPV6);
+    port_allocator_flags &= ~(cricket::PORTALLOCATOR_ENABLE_IPV6);
   } else if (webrtc::field_trial::FindFullName("WebRTC-IPv6Default")
                  .find("Disabled") == 0) {
-    port_allocator_flags_ &= ~(cricket::PORTALLOCATOR_ENABLE_IPV6);
+    port_allocator_flags &= ~(cricket::PORTALLOCATOR_ENABLE_IPV6);
   }
 
   if (configuration.disable_ipv6_on_wifi) {
-    port_allocator_flags_ &= ~(cricket::PORTALLOCATOR_ENABLE_IPV6_ON_WIFI);
+    port_allocator_flags &= ~(cricket::PORTALLOCATOR_ENABLE_IPV6_ON_WIFI);
     RTC_LOG(LS_INFO) << "IPv6 candidates on Wi-Fi are disabled.";
   }
 
   if (configuration.tcp_candidate_policy == kTcpCandidatePolicyDisabled) {
-    port_allocator_flags_ |= cricket::PORTALLOCATOR_DISABLE_TCP;
+    port_allocator_flags |= cricket::PORTALLOCATOR_DISABLE_TCP;
     RTC_LOG(LS_INFO) << "TCP candidates are disabled.";
   }
 
   if (configuration.candidate_network_policy ==
       kCandidateNetworkPolicyLowCost) {
-    port_allocator_flags_ |= cricket::PORTALLOCATOR_DISABLE_COSTLY_NETWORKS;
+    port_allocator_flags |= cricket::PORTALLOCATOR_DISABLE_COSTLY_NETWORKS;
     RTC_LOG(LS_INFO) << "Do not gather candidates on high-cost networks";
   }
 
   if (configuration.disable_link_local_networks) {
-    port_allocator_flags_ |= cricket::PORTALLOCATOR_DISABLE_LINK_LOCAL_NETWORKS;
+    port_allocator_flags |= cricket::PORTALLOCATOR_DISABLE_LINK_LOCAL_NETWORKS;
     RTC_LOG(LS_INFO) << "Disable candidates on link-local network interfaces.";
   }
 
-  port_allocator_->set_flags(port_allocator_flags_);
+  port_allocator_->set_flags(port_allocator_flags);
   // No step delay is used while allocating ports.
   port_allocator_->set_step_delay(cricket::kMinimumStepDelay);
   port_allocator_->set_candidate_filter(
@@ -5349,7 +5365,10 @@ bool PeerConnection::InitializePortAllocator_n(
       configuration.ice_candidate_pool_size, configuration.prune_turn_ports,
       configuration.turn_customizer,
       configuration.stun_candidate_keepalive_interval);
-  return true;
+
+  InitializePortAllocatorResult res;
+  res.enable_ipv6 = port_allocator_flags & cricket::PORTALLOCATOR_ENABLE_IPV6;
+  return res;
 }
 
 bool PeerConnection::ReconfigurePortAllocator_n(
@@ -6224,7 +6243,7 @@ cricket::VoiceChannel* PeerConnection::CreateVoiceChannel(
   }
 
   cricket::VoiceChannel* voice_channel = channel_manager()->CreateVoiceChannel(
-      call_.get(), configuration_.media_config, rtp_transport, media_transport,
+      call_ptr_, configuration_.media_config, rtp_transport, media_transport,
       signaling_thread(), mid, SrtpRequired(), GetCryptoOptions(),
       &ssrc_generator_, audio_options_);
   if (!voice_channel) {
@@ -6249,7 +6268,7 @@ cricket::VideoChannel* PeerConnection::CreateVideoChannel(
   }
 
   cricket::VideoChannel* video_channel = channel_manager()->CreateVideoChannel(
-      call_.get(), configuration_.media_config, rtp_transport, media_transport,
+      call_ptr_, configuration_.media_config, rtp_transport, media_transport,
       signaling_thread(), mid, SrtpRequired(), GetCryptoOptions(),
       &ssrc_generator_, video_options_);
   if (!video_channel) {
@@ -6318,6 +6337,7 @@ Call::Stats PeerConnection::GetCallStats() {
     return worker_thread()->Invoke<Call::Stats>(
         RTC_FROM_HERE, rtc::Bind(&PeerConnection::GetCallStats, this));
   }
+  RTC_DCHECK_RUN_ON(worker_thread());
   if (call_) {
     return call_->GetStats();
   } else {
@@ -6955,7 +6975,7 @@ void PeerConnection::ReportNegotiatedCiphers(
 }
 
 void PeerConnection::OnSentPacket_w(const rtc::SentPacket& sent_packet) {
-  RTC_DCHECK(worker_thread()->IsCurrent());
+  RTC_DCHECK_RUN_ON(worker_thread());
   RTC_DCHECK(call_);
   call_->OnSentPacket(sent_packet);
 }
@@ -7081,6 +7101,7 @@ CryptoOptions PeerConnection::GetCryptoOptions() {
 }
 
 void PeerConnection::ClearStatsCache() {
+  RTC_DCHECK_RUN_ON(signaling_thread());
   if (stats_collector_) {
     stats_collector_->ClearCachedStatsReport();
   }

@@ -185,6 +185,31 @@ std::array<uint8_t, 2> GetExperimentGroups() {
   }
   return experiment_groups;
 }
+
+// Limit allocation across TLs in bitrate allocation according to number of TLs
+// in EncoderInfo.
+VideoBitrateAllocation UpdateAllocationFromEncoderInfo(
+    const VideoBitrateAllocation& allocation,
+    const VideoEncoder::EncoderInfo& encoder_info) {
+  if (allocation.get_sum_bps() == 0) {
+    return allocation;
+  }
+  VideoBitrateAllocation new_allocation;
+  for (int si = 0; si < kMaxSpatialLayers; ++si) {
+    if (encoder_info.fps_allocation[si].size() == 1 &&
+        allocation.IsSpatialLayerUsed(si)) {
+      // One TL is signalled to be used by the encoder. Do not distribute
+      // bitrate allocation across TLs (use sum at ti:0).
+      new_allocation.SetBitrate(si, 0, allocation.GetSpatialLayerSum(si));
+    } else {
+      for (int ti = 0; ti < kMaxTemporalStreams; ++ti) {
+        if (allocation.HasBitrate(si, ti))
+          new_allocation.SetBitrate(si, ti, allocation.GetBitrate(si, ti));
+      }
+    }
+  }
+  return new_allocation;
+}
 }  //  namespace
 
 // VideoSourceProxy is responsible ensuring thread safety between calls to
@@ -463,7 +488,7 @@ VideoStreamEncoder::VideoStreamEncoder(
       force_disable_frame_dropper_(false),
       input_framerate_(kFrameRateAvergingWindowSizeMs, 1000),
       pending_frame_drops_(0),
-      next_frame_types_(1, kVideoFrameDelta),
+      next_frame_types_(1, VideoFrameType::kVideoFrameDelta),
       frame_encoder_timer_(this),
       experiment_groups_(GetExperimentGroups()),
       encoder_queue_(task_queue_factory->CreateTaskQueue(
@@ -722,13 +747,14 @@ void VideoStreamEncoder::ReconfigureEncoder() {
     }
 
     frame_encoder_timer_.Reset();
+    last_encode_info_ms_ = absl::nullopt;
   }
 
   if (success) {
     next_frame_types_.clear();
     next_frame_types_.resize(
         std::max(static_cast<int>(codec.numberOfSimulcastStreams), 1),
-        kVideoFrameKey);
+        VideoFrameType::kVideoFrameKey);
     RTC_LOG(LS_VERBOSE) << " max bitrate " << codec.maxBitrate
                         << " start bitrate " << codec.startBitrate
                         << " max frame rate " << codec.maxFramerate
@@ -977,7 +1003,20 @@ VideoStreamEncoder::GetBitrateAllocationAndNotifyObserver(
   }
 
   if (bitrate_observer_ && bitrate_allocation.get_sum_bps() > 0) {
-    bitrate_observer_->OnBitrateAllocationUpdated(bitrate_allocation);
+    if (encoder_ && encoder_initialized_) {
+      // Avoid too old encoder_info_.
+      const int64_t kMaxDiffMs = 100;
+      const bool updated_recently =
+          (last_encode_info_ms_ && ((clock_->TimeInMilliseconds() -
+                                     *last_encode_info_ms_) < kMaxDiffMs));
+      // Update allocation according to info from encoder.
+      bitrate_observer_->OnBitrateAllocationUpdated(
+          UpdateAllocationFromEncoderInfo(
+              bitrate_allocation,
+              updated_recently ? encoder_info_ : encoder_->GetEncoderInfo()));
+    } else {
+      bitrate_observer_->OnBitrateAllocationUpdated(bitrate_allocation);
+    }
   }
 
   if (bitrate_adjuster_) {
@@ -1238,6 +1277,7 @@ void VideoStreamEncoder::EncodeVideoFrame(const VideoFrame& video_frame,
   }
 
   encoder_info_ = info;
+  last_encode_info_ms_ = clock_->TimeInMilliseconds();
   RTC_DCHECK_EQ(send_codec_.width, out_frame.width());
   RTC_DCHECK_EQ(send_codec_.height, out_frame.height());
   const VideoFrameBuffer::Type buffer_type =
@@ -1291,7 +1331,7 @@ void VideoStreamEncoder::EncodeVideoFrame(const VideoFrame& video_frame,
   }
 
   for (auto& it : next_frame_types_) {
-    it = kVideoFrameDelta;
+    it = VideoFrameType::kVideoFrameDelta;
   }
 }
 
@@ -1303,7 +1343,7 @@ void VideoStreamEncoder::SendKeyFrame() {
   RTC_DCHECK_RUN_ON(&encoder_queue_);
   TRACE_EVENT0("webrtc", "OnKeyFrameRequest");
   RTC_DCHECK(!next_frame_types_.empty());
-  next_frame_types_[0] = kVideoFrameKey;
+  next_frame_types_[0] = VideoFrameType::kVideoFrameKey;
   if (HasInternalSource()) {
     // Try to request the frame if we have an external encoder with
     // internal source since AddVideoFrame never will be called.
@@ -1322,7 +1362,7 @@ void VideoStreamEncoder::SendKeyFrame() {
                              .build(),
                          &next_frame_types_) == WEBRTC_VIDEO_CODEC_OK) {
       // Try to remove just-performed keyframe request, if stream still exists.
-      next_frame_types_[0] = kVideoFrameDelta;
+      next_frame_types_[0] = VideoFrameType::kVideoFrameDelta;
     }
   }
 }
@@ -1453,6 +1493,11 @@ void VideoStreamEncoder::OnBitrateUpdated(DataRate target_bitrate,
     // without an actual BW estimate.
     initial_framedrop_ = 0;
     has_seen_first_significant_bwe_change_ = true;
+  }
+
+  if (encoder_) {
+    encoder_->OnPacketLossRateUpdate(static_cast<float>(fraction_lost) / 256.f);
+    encoder_->OnRttUpdate(round_trip_time_ms);
   }
 
   uint32_t framerate_fps = GetInputFramerateFps();

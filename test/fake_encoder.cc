@@ -132,8 +132,8 @@ int32_t FakeEncoder::Encode(const VideoFrame& input_image,
     WriteCounter(encoded.data() + frame_info.layers[i].size - 4, counter);
     encoded.SetTimestamp(input_image.timestamp());
     encoded.capture_time_ms_ = input_image.render_time_ms();
-    encoded._frameType =
-        frame_info.keyframe ? kVideoFrameKey : kVideoFrameDelta;
+    encoded._frameType = frame_info.keyframe ? VideoFrameType::kVideoFrameKey
+                                             : VideoFrameType::kVideoFrameDelta;
     encoded._encodedWidth = simulcast_streams[i].width;
     encoded._encodedHeight = simulcast_streams[i].height;
     encoded.rotation_ = input_image.rotation();
@@ -172,7 +172,7 @@ FakeEncoder::FrameInfo FakeEncoder::NextFrame(
 
   if (frame_types) {
     for (VideoFrameType frame_type : *frame_types) {
-      if (frame_type == kVideoFrameKey) {
+      if (frame_type == VideoFrameType::kVideoFrameKey) {
         frame_info.keyframe = true;
         break;
       }
@@ -363,8 +363,11 @@ int32_t DelayedEncoder::Encode(const VideoFrame& input_image,
   return FakeEncoder::Encode(input_image, frame_types);
 }
 
-MultithreadedFakeH264Encoder::MultithreadedFakeH264Encoder(Clock* clock)
+MultithreadedFakeH264Encoder::MultithreadedFakeH264Encoder(
+    Clock* clock,
+    TaskQueueFactory* task_queue_factory)
     : test::FakeH264Encoder(clock),
+      task_queue_factory_(task_queue_factory),
       current_queue_(0),
       queue1_(nullptr),
       queue2_(nullptr) {
@@ -378,8 +381,10 @@ int32_t MultithreadedFakeH264Encoder::InitEncode(const VideoCodec* config,
                                                  size_t max_payload_size) {
   RTC_DCHECK_CALLED_SEQUENTIALLY(&sequence_checker_);
 
-  queue1_.reset(new rtc::TaskQueue("Queue 1"));
-  queue2_.reset(new rtc::TaskQueue("Queue 2"));
+  queue1_ = task_queue_factory_->CreateTaskQueue(
+      "Queue 1", TaskQueueFactory::Priority::NORMAL);
+  queue2_ = task_queue_factory_->CreateTaskQueue(
+      "Queue 2", TaskQueueFactory::Priority::NORMAL);
 
   return FakeH264Encoder::InitEncode(config, number_of_cores, max_payload_size);
 }
@@ -409,8 +414,8 @@ int32_t MultithreadedFakeH264Encoder::Encode(
     const std::vector<VideoFrameType>* frame_types) {
   RTC_DCHECK_CALLED_SEQUENTIALLY(&sequence_checker_);
 
-  std::unique_ptr<rtc::TaskQueue>& queue =
-      (current_queue_++ % 2 == 0) ? queue1_ : queue2_;
+  TaskQueueBase* queue =
+      (current_queue_++ % 2 == 0) ? queue1_.get() : queue2_.get();
 
   if (!queue) {
     return WEBRTC_VIDEO_CODEC_UNINITIALIZED;

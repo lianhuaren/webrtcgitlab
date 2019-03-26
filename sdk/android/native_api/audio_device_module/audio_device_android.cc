@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "absl/memory/memory.h"
+#include "api/scoped_refptr.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/ref_count.h"
 #include "rtc_base/ref_counted_object.h"
@@ -40,9 +41,11 @@ void GetDefaultAudioParameters(JNIEnv* env,
   const JavaParamRef<jobject> j_context(application_context);
   const ScopedJavaLocalRef<jobject> j_audio_manager =
       jni::GetAudioManager(env, j_context);
-  const int sample_rate = jni::GetDefaultSampleRate(env, j_audio_manager);
-  jni::GetAudioParameters(env, j_context, j_audio_manager, sample_rate,
-                          false /* use_stereo_input */,
+  const int input_sample_rate = jni::GetDefaultSampleRate(env, j_audio_manager);
+  const int output_sample_rate =
+      jni::GetDefaultSampleRate(env, j_audio_manager);
+  jni::GetAudioParameters(env, j_context, j_audio_manager, input_sample_rate,
+                          output_sample_rate, false /* use_stereo_input */,
                           false /* use_stereo_output */, input_parameters,
                           output_parameters);
 }
@@ -107,9 +110,10 @@ rtc::scoped_refptr<AudioDeviceModule> CreateOpenSLESAudioDeviceModule(
   GetDefaultAudioParameters(env, application_context, &input_parameters,
                             &output_parameters);
   // Create ADM from OpenSLESRecorder and OpenSLESPlayer.
-  auto engine_manager = absl::make_unique<jni::OpenSLEngineManager>();
-  auto audio_input = absl::make_unique<jni::OpenSLESRecorder>(
-      input_parameters, engine_manager.get());
+  rtc::scoped_refptr<jni::OpenSLEngineManager> engine_manager(
+      new jni::OpenSLEngineManager());
+  auto audio_input = absl::make_unique<jni::OpenSLESRecorder>(input_parameters,
+                                                              engine_manager);
   auto audio_output = absl::make_unique<jni::OpenSLESPlayer>(
       output_parameters, std::move(engine_manager));
   return CreateAudioDeviceModuleFromInputAndOutput(
@@ -136,8 +140,11 @@ CreateJavaInputAndOpenSLESOutputAudioDeviceModule(JNIEnv* env,
       env, input_parameters, jni::kLowLatencyModeDelayEstimateInMilliseconds,
       jni::AudioRecordJni::CreateJavaWebRtcAudioRecord(env, j_context,
                                                        j_audio_manager));
+
+  rtc::scoped_refptr<jni::OpenSLEngineManager> engine_manager(
+      new jni::OpenSLEngineManager());
   auto audio_output = absl::make_unique<jni::OpenSLESPlayer>(
-      output_parameters, absl::make_unique<jni::OpenSLEngineManager>());
+      output_parameters, std::move(engine_manager));
   return CreateAudioDeviceModuleFromInputAndOutput(
       AudioDeviceModule::kAndroidJavaInputAndOpenSLESOutputAudio,
       false /* use_stereo_input */, false /* use_stereo_output */,
