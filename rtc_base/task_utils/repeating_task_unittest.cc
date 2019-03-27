@@ -15,7 +15,7 @@
 
 #include "absl/memory/memory.h"
 #include "rtc_base/event.h"
-#include "rtc_base/task_queue.h"
+#include "rtc_base/task_queue_for_test.h"
 #include "rtc_base/task_utils/repeating_task.h"
 #include "test/gmock.h"
 #include "test/gtest.h"
@@ -60,6 +60,18 @@ class MoveOnlyClosure {
  private:
   MockClosure* mock_;
 };
+
+// Helper closure class to stop repeating task on a task queue. This is
+// equivalent to [handle{move(handle)}] { handle.Stop(); } in c++14.
+class TaskHandleStopper {
+ public:
+  explicit TaskHandleStopper(RepeatingTaskHandle handle)
+      : handle_(std::move(handle)) {}
+  void operator()() { handle_.Stop(); }
+
+ private:
+  RepeatingTaskHandle handle_;
+};
 }  // namespace
 
 TEST(RepeatingTaskTest, TaskIsStoppedOnStop) {
@@ -68,7 +80,7 @@ TEST(RepeatingTaskTest, TaskIsStoppedOnStop) {
   const int kShortIntervalCount = 4;
   const int kMargin = 1;
 
-  rtc::TaskQueue task_queue("TestQueue");
+  TaskQueueForTest task_queue("TestQueue");
   std::atomic_int counter(0);
   auto handle = RepeatingTaskHandle::Start(task_queue.Get(), [&] {
     if (++counter >= kShortIntervalCount)
@@ -79,7 +91,7 @@ TEST(RepeatingTaskTest, TaskIsStoppedOnStop) {
   Sleep(kShortInterval * (kShortIntervalCount + kMargin));
   EXPECT_EQ(counter.load(), kShortIntervalCount);
 
-  handle.PostStop();
+  task_queue.PostTask(TaskHandleStopper(std::move(handle)));
   // Sleep long enough that the task would run at least once more if not
   // stopped.
   Sleep(kLongInterval * 2);
@@ -96,7 +108,7 @@ TEST(RepeatingTaskTest, CompensatesForLongRunTime) {
   const int kSleepAtCount = 3;
 
   std::atomic_int counter(0);
-  rtc::TaskQueue task_queue("TestQueue");
+  TaskQueueForTest task_queue("TestQueue");
   RepeatingTaskHandle::Start(task_queue.Get(), [&] {
     if (++counter == kSleepAtCount)
       Sleep(kSleepDuration);
@@ -110,7 +122,7 @@ TEST(RepeatingTaskTest, CompensatesForLongRunTime) {
 
 TEST(RepeatingTaskTest, CompensatesForShortRunTime) {
   std::atomic_int counter(0);
-  rtc::TaskQueue task_queue("TestQueue");
+  TaskQueueForTest task_queue("TestQueue");
   RepeatingTaskHandle::Start(task_queue.Get(), [&] {
     ++counter;
     // Sleeping for the 10 ms should be compensated.
@@ -129,10 +141,10 @@ TEST(RepeatingTaskTest, CancelDelayedTaskBeforeItRuns) {
   MockClosure mock;
   EXPECT_CALL(mock, Call).Times(0);
   EXPECT_CALL(mock, Delete).WillOnce(Invoke([&done] { done.Set(); }));
-  rtc::TaskQueue task_queue("queue");
+  TaskQueueForTest task_queue("queue");
   auto handle = RepeatingTaskHandle::DelayedStart(
       task_queue.Get(), TimeDelta::ms(100), MoveOnlyClosure(&mock));
-  handle.PostStop();
+  task_queue.PostTask(TaskHandleStopper(std::move(handle)));
   EXPECT_TRUE(done.Wait(kTimeout.ms()));
 }
 
@@ -141,16 +153,16 @@ TEST(RepeatingTaskTest, CancelTaskAfterItRuns) {
   MockClosure mock;
   EXPECT_CALL(mock, Call).WillOnce(Return(TimeDelta::ms(100)));
   EXPECT_CALL(mock, Delete).WillOnce(Invoke([&done] { done.Set(); }));
-  rtc::TaskQueue task_queue("queue");
+  TaskQueueForTest task_queue("queue");
   auto handle =
       RepeatingTaskHandle::Start(task_queue.Get(), MoveOnlyClosure(&mock));
-  handle.PostStop();
+  task_queue.PostTask(TaskHandleStopper(std::move(handle)));
   EXPECT_TRUE(done.Wait(kTimeout.ms()));
 }
 
 TEST(RepeatingTaskTest, TaskCanStopItself) {
   std::atomic_int counter(0);
-  rtc::TaskQueue task_queue("TestQueue");
+  TaskQueueForTest task_queue("TestQueue");
   RepeatingTaskHandle handle;
   task_queue.PostTask([&] {
     handle = RepeatingTaskHandle::Start(task_queue.Get(), [&] {
@@ -172,7 +184,7 @@ TEST(RepeatingTaskTest, ZeroReturnValueRepostsTheTask) {
         done.Set();
         return kTimeout;
       }));
-  rtc::TaskQueue task_queue("queue");
+  TaskQueueForTest task_queue("queue");
   RepeatingTaskHandle::Start(task_queue.Get(), MoveOnlyClosure(&closure));
   EXPECT_TRUE(done.Wait(kTimeout.ms()));
 }
@@ -187,7 +199,7 @@ TEST(RepeatingTaskTest, StartPeriodicTask) {
         done.Set();
         return kTimeout;
       }));
-  rtc::TaskQueue task_queue("queue");
+  TaskQueueForTest task_queue("queue");
   RepeatingTaskHandle::Start(task_queue.Get(), closure.AsStdFunction());
   EXPECT_TRUE(done.Wait(kTimeout.ms()));
 }
@@ -205,15 +217,15 @@ TEST(RepeatingTaskTest, Example) {
       });
     }
   };
-  rtc::TaskQueue task_queue("queue");
+  TaskQueueForTest task_queue("queue");
   auto object = absl::make_unique<ObjectOnTaskQueue>();
   // Create and start the periodic task.
   RepeatingTaskHandle handle;
   object->StartPeriodicTask(&handle, task_queue.Get());
   // Restart the task
-  handle.PostStop();
+  task_queue.PostTask(TaskHandleStopper(std::move(handle)));
   object->StartPeriodicTask(&handle, task_queue.Get());
-  handle.PostStop();
+  task_queue.PostTask(TaskHandleStopper(std::move(handle)));
   struct Destructor {
     void operator()() { object.reset(); }
     std::unique_ptr<ObjectOnTaskQueue> object;
