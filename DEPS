@@ -1584,13 +1584,10 @@ hooks = [
     # Download test resources, i.e. video and audio files from Google Storage.
     'pattern': '.',
     'action': ['download_from_google_storage',
-               '--directory',
-               '--recursive',
-               '--num_threads=10',
+                "--no_resume",
                '--no_auth',
-               '--quiet',
                '--bucket', 'chromium-webrtc-resources',
-               'src/resources'],
+               'src/resources.tgz'],
   },
 ]
 
