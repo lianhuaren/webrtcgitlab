@@ -18,7 +18,6 @@
 #include "api/test/videocodec_test_fixture.h"
 #include "api/video_codecs/video_decoder_factory.h"
 #include "api/video_codecs/video_encoder_factory.h"
-#include "common_types.h"  // NOLINT(build/include)
 #include "common_video/h264/h264_common.h"
 #include "modules/video_coding/codecs/test/videocodec_test_stats_impl.h"
 #include "modules/video_coding/codecs/test/videoprocessor.h"
@@ -67,7 +66,7 @@ class VideoCodecTestFixtureImpl : public VideoCodecTestFixture {
                            int initial_framerate_fps);
   void ReleaseAndCloseObjects(TaskQueueForTest* task_queue);
 
-  void ProcessAllFrames(rtc::TaskQueue* task_queue,
+  void ProcessAllFrames(TaskQueueForTest* task_queue,
                         const std::vector<RateProfile>& rate_profiles);
   void AnalyzeAllFrames(
       const std::vector<RateProfile>& rate_profiles,

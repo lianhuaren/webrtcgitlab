@@ -48,8 +48,8 @@ NetworkEmulationManagerImpl::~NetworkEmulationManagerImpl() = default;
 
 EmulatedNetworkNode* NetworkEmulationManagerImpl::CreateEmulatedNode(
     std::unique_ptr<NetworkBehaviorInterface> network_behavior) {
-  auto node =
-      absl::make_unique<EmulatedNetworkNode>(std::move(network_behavior));
+  auto node = absl::make_unique<EmulatedNetworkNode>(
+      clock_, &task_queue_, std::move(network_behavior));
   EmulatedNetworkNode* out = node.get();
 
   struct Closure {
@@ -80,10 +80,25 @@ EmulatedEndpoint* NetworkEmulationManagerImpl::CreateEndpoint(
 
   bool res = used_ip_addresses_.insert(*ip).second;
   RTC_CHECK(res) << "IP=" << ip->ToString() << " already in use";
-  auto node = absl::make_unique<EmulatedEndpoint>(next_node_id_++, *ip, clock_);
+  auto node = absl::make_unique<EmulatedEndpoint>(
+      next_node_id_++, *ip, config.start_as_enabled, &task_queue_, clock_);
   EmulatedEndpoint* out = node.get();
   endpoints_.push_back(std::move(node));
   return out;
+}
+
+void NetworkEmulationManagerImpl::EnableEndpoint(EmulatedEndpoint* endpoint) {
+  EmulatedNetworkManager* network_manager =
+      endpoint_to_network_manager_[endpoint];
+  RTC_CHECK(network_manager);
+  network_manager->EnableEndpoint(endpoint);
+}
+
+void NetworkEmulationManagerImpl::DisableEndpoint(EmulatedEndpoint* endpoint) {
+  EmulatedNetworkManager* network_manager =
+      endpoint_to_network_manager_[endpoint];
+  RTC_CHECK(network_manager);
+  network_manager->DisableEndpoint(endpoint);
 }
 
 EmulatedRoute* NetworkEmulationManagerImpl::CreateRoute(
@@ -94,14 +109,13 @@ EmulatedRoute* NetworkEmulationManagerImpl::CreateRoute(
   // provided here.
   RTC_CHECK(!via_nodes.empty());
 
-  from->SetSendNode(via_nodes[0]);
+  from->router()->SetReceiver(to->GetPeerLocalAddress(), via_nodes[0]);
   EmulatedNetworkNode* cur_node = via_nodes[0];
   for (size_t i = 1; i < via_nodes.size(); ++i) {
-    cur_node->SetReceiver(to->GetId(), via_nodes[i]);
+    cur_node->router()->SetReceiver(to->GetPeerLocalAddress(), via_nodes[i]);
     cur_node = via_nodes[i];
   }
-  cur_node->SetReceiver(to->GetId(), to);
-  from->SetConnectedEndpointId(to->GetId());
+  cur_node->router()->SetReceiver(to->GetPeerLocalAddress(), to);
 
   std::unique_ptr<EmulatedRoute> route =
       absl::make_unique<EmulatedRoute>(from, std::move(via_nodes), to);
@@ -112,18 +126,16 @@ EmulatedRoute* NetworkEmulationManagerImpl::CreateRoute(
 
 void NetworkEmulationManagerImpl::ClearRoute(EmulatedRoute* route) {
   RTC_CHECK(route->active) << "Route already cleared";
+  task_queue_.SendTask([route]() {
+    // Remove receiver from intermediate nodes.
+    for (auto* node : route->via_nodes) {
+      node->router()->RemoveReceiver(route->to->GetPeerLocalAddress());
+    }
+    // Remove destination endpoint from source endpoint's router.
+    route->from->router()->RemoveReceiver(route->to->GetPeerLocalAddress());
 
-  // Remove receiver from intermediate nodes.
-  for (auto* node : route->via_nodes) {
-    node->RemoveReceiver(route->to->GetId());
-  }
-  // Detach endpoint from current send node.
-  if (route->from->GetSendNode()) {
-    route->from->GetSendNode()->RemoveReceiver(route->to->GetId());
-    route->from->SetSendNode(nullptr);
-  }
-
-  route->active = false;
+    route->active = false;
+  });
 }
 
 TrafficRoute* NetworkEmulationManagerImpl::CreateTrafficRoute(
@@ -134,10 +146,11 @@ TrafficRoute* NetworkEmulationManagerImpl::CreateTrafficRoute(
   // Setup a route via specified nodes.
   EmulatedNetworkNode* cur_node = via_nodes[0];
   for (size_t i = 1; i < via_nodes.size(); ++i) {
-    cur_node->SetReceiver(endpoint->GetId(), via_nodes[i]);
+    cur_node->router()->SetReceiver(endpoint->GetPeerLocalAddress(),
+                                    via_nodes[i]);
     cur_node = via_nodes[i];
   }
-  cur_node->SetReceiver(endpoint->GetId(), endpoint);
+  cur_node->router()->SetReceiver(endpoint->GetPeerLocalAddress(), endpoint);
 
   std::unique_ptr<TrafficRoute> traffic_route =
       absl::make_unique<TrafficRoute>(clock_, via_nodes[0], endpoint);
@@ -182,37 +195,26 @@ NetworkEmulationManagerImpl::CreatePulsedPeaksCrossTraffic(
   return out;
 }
 
-rtc::Thread* NetworkEmulationManagerImpl::CreateNetworkThread(
+EmulatedNetworkManagerInterface*
+NetworkEmulationManagerImpl::CreateEmulatedNetworkManagerInterface(
     const std::vector<EmulatedEndpoint*>& endpoints) {
-  FakeNetworkSocketServer* socket_server = CreateSocketServer(endpoints);
-  std::unique_ptr<rtc::Thread> network_thread =
-      absl::make_unique<rtc::Thread>(socket_server);
-  network_thread->SetName("network_thread" + std::to_string(threads_.size()),
-                          nullptr);
-  network_thread->Start();
-  rtc::Thread* out = network_thread.get();
-  threads_.push_back(std::move(network_thread));
-  return out;
-}
-
-rtc::NetworkManager* NetworkEmulationManagerImpl::CreateNetworkManager(
-    const std::vector<EmulatedEndpoint*>& endpoints) {
-  auto network_manager = absl::make_unique<rtc::FakeNetworkManager>();
+  auto endpoints_controller = absl::make_unique<EndpointsContainer>(endpoints);
+  auto network_manager = absl::make_unique<EmulatedNetworkManager>(
+      clock_, endpoints_controller.get());
   for (auto* endpoint : endpoints) {
-    network_manager->AddInterface(
-        rtc::SocketAddress(endpoint->GetPeerLocalAddress(), /*port=*/0));
+    // Associate endpoint with network manager.
+    bool insertion_result =
+        endpoint_to_network_manager_.insert({endpoint, network_manager.get()})
+            .second;
+    RTC_CHECK(insertion_result)
+        << "Endpoint ip=" << endpoint->GetPeerLocalAddress().ToString()
+        << " is already used for another network";
   }
-  rtc::NetworkManager* out = network_manager.get();
-  managers_.push_back(std::move(network_manager));
-  return out;
-}
 
-FakeNetworkSocketServer* NetworkEmulationManagerImpl::CreateSocketServer(
-    const std::vector<EmulatedEndpoint*>& endpoints) {
-  auto socket_server =
-      absl::make_unique<FakeNetworkSocketServer>(clock_, endpoints);
-  FakeNetworkSocketServer* out = socket_server.get();
-  socket_servers_.push_back(std::move(socket_server));
+  EmulatedNetworkManagerInterface* out = network_manager.get();
+
+  endpoints_controllers_.push_back(std::move(endpoints_controller));
+  network_managers_.push_back(std::move(network_manager));
   return out;
 }
 
@@ -240,9 +242,6 @@ void NetworkEmulationManagerImpl::ProcessNetworkPackets() {
   }
   for (auto& traffic : pulsed_cross_traffics_) {
     traffic->Process(current_time);
-  }
-  for (auto& node : network_nodes_) {
-    node->Process(current_time);
   }
 }
 

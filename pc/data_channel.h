@@ -62,6 +62,10 @@ struct InternalDataChannelInit : public DataChannelInit {
     // If the channel is externally negotiated, do not send the OPEN message.
     if (base.negotiated) {
       open_handshake_role = kNone;
+    } else {
+      // Datachannel is externally negotiated. Ignore the id value.
+      // Specified in createDataChannel, WebRTC spec section 6.1 bullet 13.
+      id = -1;
     }
   }
 
@@ -146,6 +150,13 @@ class DataChannel : public DataChannelInterface, public sigslot::has_slots<> {
   virtual uint32_t messages_received() const { return messages_received_; }
   virtual uint64_t bytes_received() const { return bytes_received_; }
   virtual bool Send(const DataBuffer& buffer);
+
+  // Close immediately, ignoring any queued data or closing procedure.
+  // This is called for RTP data channels when SDP indicates a channel should
+  // be removed, or SCTP data channels when the underlying SctpTransport is
+  // being destroyed.
+  // It is also called by the PeerConnection if SCTP ID assignment fails.
+  void CloseAbruptly();
 
   // Called when the channel's ready to use.  That can happen when the
   // underlying DataMediaChannel becomes ready, or when this channel is a new
@@ -242,11 +253,6 @@ class DataChannel : public DataChannelInterface, public sigslot::has_slots<> {
   };
 
   bool Init(const InternalDataChannelInit& config);
-  // Close immediately, ignoring any queued data or closing procedure.
-  // This is called for RTP data channels when SDP indicates a channel should
-  // be removed, or SCTP data channels when the underlying SctpTransport is
-  // being destroyed.
-  void CloseAbruptly();
   void UpdateState();
   void SetState(DataState state);
   void DisconnectFromProvider();

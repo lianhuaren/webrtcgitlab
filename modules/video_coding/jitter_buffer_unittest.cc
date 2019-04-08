@@ -14,6 +14,7 @@
 #include <memory>
 #include <vector>
 
+#include "absl/memory/memory.h"
 #include "common_video/h264/h264_common.h"
 #include "modules/video_coding/frame_buffer.h"
 #include "modules/video_coding/jitter_buffer.h"
@@ -200,26 +201,13 @@ TEST_F(Vp9SsMapTest, UpdatePacket) {
   EXPECT_EQ(1, vp9_header.pid_diff[0]);
 }
 
-class TestBasicJitterBuffer : public ::testing::TestWithParam<std::string>,
-                              public NackSender,
-                              public KeyFrameRequestSender {
- public:
-  void SendNack(const std::vector<uint16_t>& sequence_numbers) override {
-    nack_sent_.insert(nack_sent_.end(), sequence_numbers.begin(),
-                      sequence_numbers.end());
-  }
-
-  void RequestKeyFrame() override { ++keyframe_requests_; }
-
-  std::vector<uint16_t> nack_sent_;
-  int keyframe_requests_;
-
+class TestBasicJitterBuffer : public ::testing::Test {
  protected:
   TestBasicJitterBuffer() {}
   void SetUp() override {
     clock_.reset(new SimulatedClock(0));
     jitter_buffer_.reset(new VCMJitterBuffer(
-        clock_.get(), absl::WrapUnique(EventWrapper::Create()), this, this));
+        clock_.get(), absl::WrapUnique(EventWrapper::Create())));
     jitter_buffer_->Start();
     seq_num_ = 1234;
     timestamp_ = 0;
@@ -305,20 +293,7 @@ class TestBasicJitterBuffer : public ::testing::TestWithParam<std::string>,
   std::unique_ptr<VCMJitterBuffer> jitter_buffer_;
 };
 
-class TestRunningJitterBuffer : public ::testing::TestWithParam<std::string>,
-                                public NackSender,
-                                public KeyFrameRequestSender {
- public:
-  void SendNack(const std::vector<uint16_t>& sequence_numbers) {
-    nack_sent_.insert(nack_sent_.end(), sequence_numbers.begin(),
-                      sequence_numbers.end());
-  }
-
-  void RequestKeyFrame() { ++keyframe_requests_; }
-
-  std::vector<uint16_t> nack_sent_;
-  int keyframe_requests_;
-
+class TestRunningJitterBuffer : public ::testing::Test {
  protected:
   enum { kDataBufferSize = 10 };
 
@@ -327,7 +302,7 @@ class TestRunningJitterBuffer : public ::testing::TestWithParam<std::string>,
     max_nack_list_size_ = 150;
     oldest_packet_to_nack_ = 250;
     jitter_buffer_ = new VCMJitterBuffer(
-        clock_.get(), absl::WrapUnique(EventWrapper::Create()), this, this);
+        clock_.get(), absl::WrapUnique(EventWrapper::Create()));
     stream_generator_ = new StreamGenerator(0, clock_->TimeInMilliseconds());
     jitter_buffer_->Start();
     jitter_buffer_->SetNackSettings(max_nack_list_size_, oldest_packet_to_nack_,
@@ -450,43 +425,6 @@ TEST_F(TestBasicJitterBuffer, SinglePacketFrame) {
   CheckOutFrame(frame_out, size_, false);
   EXPECT_EQ(VideoFrameType::kVideoFrameKey, frame_out->FrameType());
   jitter_buffer_->ReleaseFrame(frame_out);
-}
-
-TEST_F(TestBasicJitterBuffer, VerifyHistogramStats) {
-  metrics::Reset();
-  // Always start with a complete key frame when not allowing errors.
-  packet_->frameType = VideoFrameType::kVideoFrameKey;
-  packet_->video_header.is_first_packet_in_frame = true;
-  packet_->markerBit = true;
-  packet_->timestamp += 123 * 90;
-
-  // Insert single packet frame to the jitter buffer and get a frame.
-  bool retransmitted = false;
-  EXPECT_EQ(kCompleteSession,
-            jitter_buffer_->InsertPacket(*packet_, &retransmitted));
-  VCMEncodedFrame* frame_out = DecodeCompleteFrame();
-  CheckOutFrame(frame_out, size_, false);
-  EXPECT_EQ(VideoFrameType::kVideoFrameKey, frame_out->FrameType());
-  jitter_buffer_->ReleaseFrame(frame_out);
-
-  // Verify that histograms are updated when the jitter buffer is stopped.
-  clock_->AdvanceTimeMilliseconds(metrics::kMinRunTimeInSeconds * 1000);
-  jitter_buffer_->Stop();
-  EXPECT_EQ(1, metrics::NumEvents("WebRTC.Video.DiscardedPacketsInPercent", 0));
-  EXPECT_EQ(1,
-            metrics::NumEvents("WebRTC.Video.DuplicatedPacketsInPercent", 0));
-  EXPECT_EQ(
-      1, metrics::NumSamples("WebRTC.Video.CompleteFramesReceivedPerSecond"));
-  EXPECT_EQ(
-      1, metrics::NumEvents("WebRTC.Video.KeyFramesReceivedInPermille", 1000));
-
-  // Verify that histograms are not updated if stop is called again.
-  jitter_buffer_->Stop();
-  EXPECT_EQ(1, metrics::NumSamples("WebRTC.Video.DiscardedPacketsInPercent"));
-  EXPECT_EQ(1, metrics::NumSamples("WebRTC.Video.DuplicatedPacketsInPercent"));
-  EXPECT_EQ(
-      1, metrics::NumSamples("WebRTC.Video.CompleteFramesReceivedPerSecond"));
-  EXPECT_EQ(1, metrics::NumSamples("WebRTC.Video.KeyFramesReceivedInPermille"));
 }
 
 TEST_F(TestBasicJitterBuffer, DualPacketFrame) {
@@ -1709,52 +1647,6 @@ TEST_F(TestRunningJitterBuffer, EmptyPackets) {
   // Insert empty packet.
   EXPECT_EQ(kCompleteSession, InsertPacketAndPop(0));
   EXPECT_FALSE(request_key_frame);
-}
-
-TEST_F(TestRunningJitterBuffer, StatisticsTest) {
-  FrameCounts frame_stats(jitter_buffer_->FrameStatistics());
-  EXPECT_EQ(0, frame_stats.delta_frames);
-  EXPECT_EQ(0, frame_stats.key_frames);
-
-  uint32_t framerate = 0;
-  uint32_t bitrate = 0;
-  jitter_buffer_->IncomingRateStatistics(&framerate, &bitrate);
-  EXPECT_EQ(0u, framerate);
-  EXPECT_EQ(0u, bitrate);
-
-  // Insert a couple of key and delta frames.
-  InsertFrame(VideoFrameType::kVideoFrameKey);
-  InsertFrame(VideoFrameType::kVideoFrameDelta);
-  InsertFrame(VideoFrameType::kVideoFrameDelta);
-  InsertFrame(VideoFrameType::kVideoFrameKey);
-  InsertFrame(VideoFrameType::kVideoFrameDelta);
-  // Decode some of them to make sure the statistics doesn't depend on frames
-  // being decoded.
-  EXPECT_TRUE(DecodeCompleteFrame());
-  EXPECT_TRUE(DecodeCompleteFrame());
-  frame_stats = jitter_buffer_->FrameStatistics();
-  EXPECT_EQ(3, frame_stats.delta_frames);
-  EXPECT_EQ(2, frame_stats.key_frames);
-
-  // Insert 20 more frames to get estimates of bitrate and framerate over
-  // 1 second.
-  for (int i = 0; i < 20; ++i) {
-    InsertFrame(VideoFrameType::kVideoFrameDelta);
-  }
-  jitter_buffer_->IncomingRateStatistics(&framerate, &bitrate);
-  // TODO(holmer): The current implementation returns the average of the last
-  // two framerate calculations, which is why it takes two calls to reach the
-  // actual framerate. This should be fixed.
-  EXPECT_EQ(kDefaultFrameRate / 2u, framerate);
-  EXPECT_EQ(kDefaultBitrateKbps, bitrate);
-  // Insert 25 more frames to get estimates of bitrate and framerate over
-  // 2 seconds.
-  for (int i = 0; i < 25; ++i) {
-    InsertFrame(VideoFrameType::kVideoFrameDelta);
-  }
-  jitter_buffer_->IncomingRateStatistics(&framerate, &bitrate);
-  EXPECT_EQ(kDefaultFrameRate, framerate);
-  EXPECT_EQ(kDefaultBitrateKbps, bitrate);
 }
 
 TEST_F(TestRunningJitterBuffer, SkipToKeyFrame) {

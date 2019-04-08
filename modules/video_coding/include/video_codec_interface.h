@@ -17,10 +17,10 @@
 #include "api/video/video_frame.h"
 #include "api/video_codecs/video_decoder.h"
 #include "api/video_codecs/video_encoder.h"
-#include "common_types.h"  // NOLINT(build/include)
 #include "common_video/generic_frame_descriptor/generic_frame_info.h"
 #include "modules/include/module_common_types.h"
 #include "modules/video_coding/include/video_error_codes.h"
+#include "rtc_base/system/rtc_export.h"
 
 namespace webrtc {
 
@@ -101,7 +101,7 @@ static_assert(std::is_pod<CodecSpecificInfoUnion>::value, "");
 // Note: if any pointers are added to this struct or its sub-structs, it
 // must be fitted with a copy-constructor. This is because it is copied
 // in the copy-constructor of VCMEncodedFrame.
-struct CodecSpecificInfo {
+struct RTC_EXPORT CodecSpecificInfo {
   CodecSpecificInfo();
   CodecSpecificInfo(const CodecSpecificInfo&);
   ~CodecSpecificInfo();

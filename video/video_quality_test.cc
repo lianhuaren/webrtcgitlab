@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "absl/memory/memory.h"
+#include "api/task_queue/default_task_queue_factory.h"
 #include "api/video/builtin_video_bitrate_allocator_factory.h"
 #include "call/fake_network_pipe.h"
 #include "call/simulated_network.h"
@@ -323,6 +324,7 @@ std::unique_ptr<VideoEncoder> VideoQualityTest::CreateVideoEncoder(
 VideoQualityTest::VideoQualityTest(
     std::unique_ptr<InjectionComponents> injection_components)
     : clock_(Clock::GetRealTimeClock()),
+      task_queue_factory_(CreateDefaultTaskQueueFactory()),
       video_decoder_factory_([this](const SdpVideoFormat& format) {
         return this->CreateVideoDecoder(format);
       }),
@@ -1133,8 +1135,7 @@ VideoQualityTest::CreateSendTransport() {
   }
   return absl::make_unique<test::LayerFilteringTransport>(
       &task_queue_,
-      absl::make_unique<FakeNetworkPipe>(Clock::GetRealTimeClock(),
-                                         std::move(network_behavior)),
+      absl::make_unique<FakeNetworkPipe>(clock_, std::move(network_behavior)),
       sender_call_.get(), kPayloadTypeVP8, kPayloadTypeVP9,
       params_.video[0].selected_tl, params_.ss[0].selected_sl,
       payload_type_map_, kVideoSendSsrcs[0],
@@ -1152,8 +1153,7 @@ VideoQualityTest::CreateReceiveTransport() {
   }
   return absl::make_unique<test::DirectTransport>(
       &task_queue_,
-      absl::make_unique<FakeNetworkPipe>(Clock::GetRealTimeClock(),
-                                         std::move(network_behavior)),
+      absl::make_unique<FakeNetworkPipe>(clock_, std::move(network_behavior)),
       receiver_call_.get(), payload_type_map_);
 }
 
@@ -1198,13 +1198,11 @@ void VideoQualityTest::RunWithAnalyzer(const Params& params) {
     recv_event_log_ = RtcEventLog::CreateNull();
   }
 
-  Call::Config send_call_config(send_event_log_.get());
-  Call::Config recv_call_config(recv_event_log_.get());
-  send_call_config.bitrate_config = params.call.call_bitrate_config;
-  recv_call_config.bitrate_config = params.call.call_bitrate_config;
-
-  task_queue_.SendTask([this, &send_call_config, &recv_call_config,
-                        &send_transport, &recv_transport]() {
+  task_queue_.SendTask([this, &params, &send_transport, &recv_transport]() {
+    Call::Config send_call_config(send_event_log_.get());
+    Call::Config recv_call_config(recv_event_log_.get());
+    send_call_config.bitrate_config = params.call.call_bitrate_config;
+    recv_call_config.bitrate_config = params.call.call_bitrate_config;
     if (params_.audio.enabled)
       InitializeAudioDevice(&send_call_config, &recv_call_config,
                             params_.audio.use_real_adm);
@@ -1229,7 +1227,8 @@ void VideoQualityTest::RunWithAnalyzer(const Params& params) {
       kSendRtxSsrcs[params_.ss[0].selected_stream],
       static_cast<size_t>(params_.ss[0].selected_stream),
       params.ss[0].selected_sl, params_.video[0].selected_tl,
-      is_quick_test_enabled, clock_, params_.logging.rtp_dump_name);
+      is_quick_test_enabled, clock_, params_.logging.rtp_dump_name,
+      &task_queue_);
 
   task_queue_.SendTask([&]() {
     analyzer_->SetCall(sender_call_.get());
@@ -1309,10 +1308,11 @@ rtc::scoped_refptr<AudioDeviceModule> VideoQualityTest::CreateAudioDevice() {
   RTC_CHECK(com_initializer_->Succeeded());
   RTC_CHECK(webrtc_win::core_audio_utility::IsSupported());
   RTC_CHECK(webrtc_win::core_audio_utility::IsMMCSSSupported());
-  return CreateWindowsCoreAudioAudioDeviceModule();
+  return CreateWindowsCoreAudioAudioDeviceModule(task_queue_factory_.get());
 #else
   // Use legacy factory method on all platforms except Windows.
-  return AudioDeviceModule::Create(AudioDeviceModule::kPlatformDefaultAudio);
+  return AudioDeviceModule::Create(AudioDeviceModule::kPlatformDefaultAudio,
+                                   task_queue_factory_.get());
 #endif
 }
 

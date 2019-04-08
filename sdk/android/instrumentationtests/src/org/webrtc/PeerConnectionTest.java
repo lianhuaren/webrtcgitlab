@@ -843,7 +843,9 @@ public class PeerConnectionTest {
   public void testSetRidInSimulcast() throws Exception {
     PeerConnectionFactory factory = PeerConnectionFactory.builder().createPeerConnectionFactory();
     PeerConnection.RTCConfiguration config = new PeerConnection.RTCConfiguration(Arrays.asList());
+    config.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
     ObserverExpectations expectations = new ObserverExpectations("PCTest:simulcast_rids");
+    expectations.expectRenegotiationNeeded();
     PeerConnection pc = factory.createPeerConnection(config, expectations);
     List<Encoding> encodings = new ArrayList<Encoding>();
     encodings.add(new Encoding("F", true, null));
@@ -1060,7 +1062,7 @@ public class PeerConnectionTest {
     assertNull(rtpParameters.encodings.get(0).maxFramerate);
     assertNull(rtpParameters.encodings.get(0).numTemporalLayers);
     assertNull(rtpParameters.encodings.get(0).scaleResolutionDownBy);
-    assertNull(rtpParameters.encodings.get(0).rid);
+    assertTrue(rtpParameters.encodings.get(0).rid.isEmpty());
 
     rtpParameters.encodings.get(0).maxBitrateBps = 300000;
     rtpParameters.encodings.get(0).minBitrateBps = 100000;

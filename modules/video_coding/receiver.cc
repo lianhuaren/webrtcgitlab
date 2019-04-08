@@ -18,7 +18,6 @@
 
 #include "absl/memory/memory.h"
 #include "api/video/encoded_image.h"
-#include "common_types.h"  // NOLINT(build/include)
 #include "modules/video_coding/encoded_frame.h"
 #include "modules/video_coding/internal_defines.h"
 #include "modules/video_coding/jitter_buffer_common.h"
@@ -35,45 +34,14 @@ VCMReceiver::VCMReceiver(VCMTiming* timing, Clock* clock)
     : VCMReceiver::VCMReceiver(timing,
                                clock,
                                absl::WrapUnique(EventWrapper::Create()),
-                               absl::WrapUnique(EventWrapper::Create()),
-                               nullptr,  // NackSender
-                               nullptr)  // KeyframeRequestSender
-{}
-
-VCMReceiver::VCMReceiver(VCMTiming* timing,
-                         Clock* clock,
-                         NackSender* nack_sender,
-                         KeyFrameRequestSender* keyframe_request_sender)
-    : VCMReceiver(timing,
-                  clock,
-                  absl::WrapUnique(EventWrapper::Create()),
-                  absl::WrapUnique(EventWrapper::Create()),
-                  nack_sender,
-                  keyframe_request_sender) {}
+                               absl::WrapUnique(EventWrapper::Create())) {}
 
 VCMReceiver::VCMReceiver(VCMTiming* timing,
                          Clock* clock,
                          std::unique_ptr<EventWrapper> receiver_event,
                          std::unique_ptr<EventWrapper> jitter_buffer_event)
-    : VCMReceiver::VCMReceiver(timing,
-                               clock,
-                               std::move(receiver_event),
-                               std::move(jitter_buffer_event),
-                               nullptr,  // NackSender
-                               nullptr)  // KeyframeRequestSender
-{}
-
-VCMReceiver::VCMReceiver(VCMTiming* timing,
-                         Clock* clock,
-                         std::unique_ptr<EventWrapper> receiver_event,
-                         std::unique_ptr<EventWrapper> jitter_buffer_event,
-                         NackSender* nack_sender,
-                         KeyFrameRequestSender* keyframe_request_sender)
     : clock_(clock),
-      jitter_buffer_(clock_,
-                     std::move(jitter_buffer_event),
-                     nack_sender,
-                     keyframe_request_sender),
+      jitter_buffer_(clock_, std::move(jitter_buffer_event)),
       timing_(timing),
       render_wait_event_(std::move(receiver_event)),
       max_video_delay_ms_(kMaxVideoDelayMs) {
@@ -226,12 +194,6 @@ VCMEncodedFrame* VCMReceiver::FrameForDecoding(uint16_t max_wait_time_ms,
 
 void VCMReceiver::ReleaseFrame(VCMEncodedFrame* frame) {
   jitter_buffer_.ReleaseFrame(frame);
-}
-
-void VCMReceiver::ReceiveStatistics(uint32_t* bitrate, uint32_t* framerate) {
-  assert(bitrate);
-  assert(framerate);
-  jitter_buffer_.IncomingRateStatistics(framerate, bitrate);
 }
 
 void VCMReceiver::SetNackMode(VCMNackMode nackMode,

@@ -144,6 +144,7 @@ rtc_static_library("libjingle_peerconnection_api") {
     ":scoped_refptr",
     "audio:audio_mixer_api",
     "audio_codecs:audio_codecs_api",
+    "task_queue",
     "transport:bitrate_settings",
     "transport:network_control",
     "transport/media:audio_interfaces",
@@ -168,11 +169,6 @@ rtc_static_library("libjingle_peerconnection_api") {
     "../rtc_base:rtc_base_approved",
     "../rtc_base/system:rtc_export",
   ]
-
-  if (is_nacl) {
-    # This is needed by .h files included from rtc_base.
-    deps += [ "//native_client_sdk/src/libraries/nacl_io" ]
-  }
 }
 
 rtc_source_set("scoped_refptr") {
@@ -217,6 +213,13 @@ rtc_source_set("video_quality_analyzer_api") {
   ]
 }
 
+rtc_source_set("track_id_stream_label_map") {
+  visibility = [ "*" ]
+  sources = [
+    "test/track_id_stream_label_map.h",
+  ]
+}
+
 rtc_source_set("audio_quality_analyzer_api") {
   visibility = [ "*" ]
   testonly = true
@@ -226,6 +229,7 @@ rtc_source_set("audio_quality_analyzer_api") {
 
   deps = [
     ":stats_observer_interface",
+    ":track_id_stream_label_map",
   ]
 }
 
@@ -471,6 +475,7 @@ rtc_source_set("ice_transport_factory") {
     ":scoped_refptr",
     "../p2p:rtc_p2p",
     "../rtc_base",
+    "../rtc_base/system:rtc_export",
     "//third_party/abseil-cpp/absl/memory",
   ]
 }

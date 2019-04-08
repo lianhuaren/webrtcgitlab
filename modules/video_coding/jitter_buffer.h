@@ -106,10 +106,7 @@ class Vp9SsMap {
 
 class VCMJitterBuffer {
  public:
-  VCMJitterBuffer(Clock* clock,
-                  std::unique_ptr<EventWrapper> event,
-                  NackSender* nack_sender = nullptr,
-                  KeyFrameRequestSender* keyframe_request_sender = nullptr);
+  VCMJitterBuffer(Clock* clock, std::unique_ptr<EventWrapper> event);
 
   ~VCMJitterBuffer();
 
@@ -125,21 +122,11 @@ class VCMJitterBuffer {
   // Empty the jitter buffer of all its data.
   void Flush();
 
-  // Get the number of received frames, by type, since the jitter buffer
-  // was started.
-  FrameCounts FrameStatistics() const;
-
   // Gets number of packets received.
   int num_packets() const;
 
   // Gets number of duplicated packets received.
   int num_duplicated_packets() const;
-
-  // Gets number of packets discarded by the jitter buffer.
-  int num_discarded_packets() const;
-
-  // Statistics, Calculate frame and bit rates.
-  void IncomingRateStatistics(unsigned int* framerate, unsigned int* bitrate);
 
   // Wait |max_wait_time_ms| for a complete frame to arrive.
   // If found, a pointer to the frame is returned. Returns nullptr otherwise.
@@ -261,12 +248,6 @@ class VCMJitterBuffer {
   // completely full. Returns true if a key frame was found.
   bool RecycleFramesUntilKeyFrame() RTC_EXCLUSIVE_LOCKS_REQUIRED(crit_sect_);
 
-  // Updates the frame statistics.
-  // Counts only complete frames, so decodable incomplete frames will not be
-  // counted.
-  void CountFrame(const VCMFrameBuffer& frame)
-      RTC_EXCLUSIVE_LOCKS_REQUIRED(crit_sect_);
-
   // Update rolling average of packets per frame.
   void UpdateAveragePacketsPerFrame(int current_number_packets_);
 
@@ -295,8 +276,6 @@ class VCMJitterBuffer {
 
   uint16_t EstimatedLowSequenceNumber(const VCMFrameBuffer& frame) const;
 
-  void UpdateHistograms() RTC_EXCLUSIVE_LOCKS_REQUIRED(crit_sect_);
-
   // Reset frame buffer and return it to free_frames_.
   void RecycleFrameBuffer(VCMFrameBuffer* frame)
       RTC_EXCLUSIVE_LOCKS_REQUIRED(crit_sect_);
@@ -315,24 +294,12 @@ class VCMJitterBuffer {
   VCMDecodingState last_decoded_state_ RTC_GUARDED_BY(crit_sect_);
   bool first_packet_since_reset_;
 
-  // Frame counts for each type (key, delta, ...)
-  FrameCounts receive_statistics_;
-  // Latest calculated frame rates of incoming stream.
-  unsigned int incoming_frame_rate_;
-  unsigned int incoming_frame_count_;
-  int64_t time_last_incoming_frame_count_;
-  unsigned int incoming_bit_count_;
-  unsigned int incoming_bit_rate_;
   // Number of packets in a row that have been too old.
   int num_consecutive_old_packets_;
   // Number of packets received.
   int num_packets_ RTC_GUARDED_BY(crit_sect_);
   // Number of duplicated packets received.
   int num_duplicated_packets_ RTC_GUARDED_BY(crit_sect_);
-  // Number of packets discarded by the jitter buffer.
-  int num_discarded_packets_ RTC_GUARDED_BY(crit_sect_);
-  // Time when first packet is received.
-  int64_t time_first_packet_ms_ RTC_GUARDED_BY(crit_sect_);
 
   // Jitter estimation.
   // Filter for estimating jitter.

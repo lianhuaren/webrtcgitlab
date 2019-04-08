@@ -42,7 +42,6 @@ class VideoEncoderWrapper : public VideoEncoder {
   int32_t Release() override;
 
   int32_t Encode(const VideoFrame& frame,
-                 const CodecSpecificInfo* codec_specific_info,
                  const std::vector<VideoFrameType>* frame_types) override;
 
   int32_t SetRateAllocation(const VideoBitrateAllocation& allocation,
@@ -78,8 +77,8 @@ class VideoEncoderWrapper : public VideoEncoder {
                            const char* method_name);
 
   RTPFragmentationHeader ParseFragmentationHeader(
-      const std::vector<uint8_t>& buffer);
-  int ParseQp(const std::vector<uint8_t>& buffer);
+      rtc::ArrayView<const uint8_t> buffer);
+  int ParseQp(rtc::ArrayView<const uint8_t> buffer);
   CodecSpecificInfo ParseCodecSpecificInfo(const EncodedImage& frame);
   ScopedJavaLocalRef<jobject> ToJavaBitrateAllocation(
       JNIEnv* jni,

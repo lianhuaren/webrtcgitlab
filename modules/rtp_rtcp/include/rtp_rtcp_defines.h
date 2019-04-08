@@ -20,7 +20,6 @@
 #include "api/audio_codecs/audio_format.h"
 #include "api/rtp_headers.h"
 #include "api/transport/network_types.h"
-#include "common_types.h"  // NOLINT(build/include)
 #include "modules/include/module_common_types.h"
 #include "system_wrappers/include/clock.h"
 
@@ -449,6 +448,10 @@ struct StreamDataCounters {
   }
 
   int64_t first_packet_time_ms;    // Time when first packet is sent/received.
+  // The timestamp at which the last packet was received, i.e. the time of the
+  // local clock when it was received - not the RTP timestamp of that packet.
+  // https://w3c.github.io/webrtc-stats/#dom-rtcinboundrtpstreamstats-lastpacketreceivedtimestamp
+  absl::optional<int64_t> last_packet_received_timestamp_ms;
   RtpPacketCounter transmitted;    // Number of transmitted packets/bytes.
   RtpPacketCounter retransmitted;  // Number of retransmitted packets/bytes.
   RtpPacketCounter fec;            // Number of redundancy packets/bytes.

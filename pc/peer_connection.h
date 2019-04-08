@@ -227,6 +227,7 @@ class PeerConnection : public PeerConnectionInternal,
   }
 
   bool initial_offerer() const override {
+    RTC_DCHECK_RUN_ON(signaling_thread());
     return transport_controller_ && transport_controller_->initial_offerer();
   }
 
@@ -252,6 +253,7 @@ class PeerConnection : public PeerConnectionInternal,
   }
 
   absl::optional<std::string> sctp_content_name() const override {
+    RTC_DCHECK_RUN_ON(signaling_thread());
     return sctp_mid_;
   }
 
@@ -616,7 +618,7 @@ class PeerConnection : public PeerConnectionInternal,
   // Returns the MID for the data section associated with either the
   // RtpDataChannel or SCTP data channel, if it has been set. If no data
   // channels are configured this will return nullopt.
-  absl::optional<std::string> GetDataMid() const;
+  absl::optional<std::string> GetDataMid() const RTC_RUN_ON(signaling_thread());
 
   // Remove all local and remote senders of type |media_type|.
   // Called when a media type is rejected (m-line set to port 0).
@@ -782,7 +784,8 @@ class PeerConnection : public PeerConnectionInternal,
       int candidate_pool_size,
       bool prune_turn_ports,
       webrtc::TurnCustomizer* turn_customizer,
-      absl::optional<int> stun_candidate_keepalive_interval);
+      absl::optional<int> stun_candidate_keepalive_interval,
+      bool have_local_description);
 
   // Starts output of an RTC event log to the given output object.
   // This function should only be called from the worker thread.
@@ -848,11 +851,13 @@ class PeerConnection : public PeerConnectionInternal,
 
   // Non-const versions of local_description()/remote_description(), for use
   // internally.
-  SessionDescriptionInterface* mutable_local_description() {
+  SessionDescriptionInterface* mutable_local_description()
+      RTC_RUN_ON(signaling_thread()) {
     return pending_local_description_ ? pending_local_description_.get()
                                       : current_local_description_.get();
   }
-  SessionDescriptionInterface* mutable_remote_description() {
+  SessionDescriptionInterface* mutable_remote_description()
+      RTC_RUN_ON(signaling_thread()) {
     return pending_remote_description_ ? pending_remote_description_.get()
                                        : current_remote_description_.get();
   }
@@ -867,7 +872,9 @@ class PeerConnection : public PeerConnectionInternal,
   // down to all of the channels.
   RTCError PushdownMediaDescription(SdpType type, cricket::ContentSource source)
       RTC_RUN_ON(signaling_thread());
-  bool PushdownSctpParameters_n(cricket::ContentSource source);
+  bool PushdownSctpParameters_n(cricket::ContentSource source,
+                                int local_sctp_port,
+                                int remote_sctp_port);
 
   RTCError PushdownTransportDescription(cricket::ContentSource source,
                                         SdpType type);
@@ -891,7 +898,8 @@ class PeerConnection : public PeerConnectionInternal,
   // Returns false if the local session description does not have a media
   // content called  |content_name|.
   bool GetLocalCandidateMediaIndex(const std::string& content_name,
-                                   int* sdp_mline_index);
+                                   int* sdp_mline_index)
+      RTC_RUN_ON(signaling_thread());
   // Uses all remote candidates in |remote_desc| in this session.
   bool UseCandidatesInSessionDescription(
       const SessionDescriptionInterface* remote_desc)
@@ -976,7 +984,7 @@ class PeerConnection : public PeerConnectionInternal,
 
   // Returns true if SRTP (either using DTLS-SRTP or SDES) is required by
   // this session.
-  bool SrtpRequired() const;
+  bool SrtpRequired() const RTC_RUN_ON(signaling_thread());
 
   // JsepTransportController signal handlers.
   void OnTransportControllerConnectionState(cricket::IceConnectionState state)
@@ -1010,7 +1018,8 @@ class PeerConnection : public PeerConnectionInternal,
   void ReportBestConnectionState(const cricket::TransportStats& stats);
 
   void ReportNegotiatedCiphers(const cricket::TransportStats& stats,
-                               const std::set<cricket::MediaType>& media_types);
+                               const std::set<cricket::MediaType>& media_types)
+      RTC_RUN_ON(signaling_thread());
 
   void NoteUsageEvent(UsageEvent event);
   void ReportUsagePattern() const RTC_RUN_ON(signaling_thread());
@@ -1053,7 +1062,8 @@ class PeerConnection : public PeerConnectionInternal,
   CryptoOptions GetCryptoOptions() RTC_RUN_ON(signaling_thread());
 
   // Returns rtp transport, result can not be nullptr.
-  RtpTransportInternal* GetRtpTransport(const std::string& mid) {
+  RtpTransportInternal* GetRtpTransport(const std::string& mid)
+      RTC_RUN_ON(signaling_thread()) {
     auto rtp_transport = transport_controller_->GetRtpTransport(mid);
     RTC_DCHECK(rtp_transport);
     return rtp_transport;
@@ -1177,7 +1187,9 @@ class PeerConnection : public PeerConnectionInternal,
 
   std::vector<
       rtc::scoped_refptr<RtpTransceiverProxyWithInternal<RtpTransceiver>>>
-      transceivers_;
+      transceivers_;  // TODO(bugs.webrtc.org/9987): Accessed on both signaling
+                      // and network thread.
+
   // In Unified Plan, if we encounter remote SDP that does not contain an a=msid
   // line we create and use a stream with a random ID for our receivers. This is
   // to support legacy endpoints that do not support the a=msid attribute (as
@@ -1194,21 +1206,34 @@ class PeerConnection : public PeerConnectionInternal,
 
   std::string session_id_ RTC_GUARDED_BY(signaling_thread());
 
-  std::unique_ptr<JsepTransportController> transport_controller_;
-  std::unique_ptr<cricket::SctpTransportInternalFactory> sctp_factory_;
+  std::unique_ptr<JsepTransportController>
+      transport_controller_;  // TODO(bugs.webrtc.org/9987): Accessed on both
+                              // signaling and network thread.
+  std::unique_ptr<cricket::SctpTransportInternalFactory>
+      sctp_factory_;  // TODO(bugs.webrtc.org/9987): Accessed on both
+                      // signaling and network thread.
   // |rtp_data_channel_| is used if in RTP data channel mode, |sctp_transport_|
   // when using SCTP.
-  cricket::RtpDataChannel* rtp_data_channel_ = nullptr;
+  cricket::RtpDataChannel* rtp_data_channel_ =
+      nullptr;  // TODO(bugs.webrtc.org/9987): Accessed on both
+                // signaling and some other thread.
 
   cricket::SctpTransportInternal* cricket_sctp_transport() {
     return sctp_transport_->internal();
   }
-  rtc::scoped_refptr<SctpTransport> sctp_transport_;
+  rtc::scoped_refptr<SctpTransport>
+      sctp_transport_;  // TODO(bugs.webrtc.org/9987): Accessed on both
+                        // signaling and network thread.
+
   // |sctp_mid_| is the content name (MID) in SDP.
-  absl::optional<std::string> sctp_mid_;
+  absl::optional<std::string>
+      sctp_mid_;  // TODO(bugs.webrtc.org/9987): Accessed on both signaling
+                  // and network thread.
+
   // Value cached on signaling thread. Only updated when SctpReadyToSendData
   // fires on the signaling thread.
-  bool sctp_ready_to_send_data_ = false;
+  bool sctp_ready_to_send_data_ RTC_GUARDED_BY(signaling_thread()) = false;
+
   // Same as signals provided by SctpTransport, but these are guaranteed to
   // fire on the signaling thread, whereas SctpTransport fires on the networking
   // thread.
@@ -1218,29 +1243,38 @@ class PeerConnection : public PeerConnectionInternal,
   // TODO(deadbeef): Use a proxy object to ensure that method calls/signals
   // are marshalled to the right thread. Could almost use proxy.h for this,
   // but it doesn't have a mechanism for marshalling sigslot::signals
-  std::unique_ptr<rtc::AsyncInvoker> sctp_invoker_;
-  sigslot::signal1<bool> SignalSctpReadyToSendData;
+  std::unique_ptr<rtc::AsyncInvoker> sctp_invoker_
+      RTC_GUARDED_BY(network_thread());
+  sigslot::signal1<bool> SignalSctpReadyToSendData
+      RTC_GUARDED_BY(signaling_thread());
   sigslot::signal2<const cricket::ReceiveDataParams&,
                    const rtc::CopyOnWriteBuffer&>
-      SignalSctpDataReceived;
-  sigslot::signal1<int> SignalSctpClosingProcedureStartedRemotely;
-  sigslot::signal1<int> SignalSctpClosingProcedureComplete;
+      SignalSctpDataReceived RTC_GUARDED_BY(signaling_thread());
+  sigslot::signal1<int> SignalSctpClosingProcedureStartedRemotely
+      RTC_GUARDED_BY(signaling_thread());
+  sigslot::signal1<int> SignalSctpClosingProcedureComplete
+      RTC_GUARDED_BY(signaling_thread());
 
   // Whether this peer is the caller. Set when the local description is applied.
   absl::optional<bool> is_caller_ RTC_GUARDED_BY(signaling_thread());
 
   // Content name (MID) for media transport data channels in SDP.
-  absl::optional<std::string> media_transport_data_mid_;
+  absl::optional<std::string>
+      media_transport_data_mid_;  // TODO(bugs.webrtc.org/9987): Accessed on
+                                  // both signaling and network thread.
 
   // Media transport used for data channels.  Thread-safe.
-  MediaTransportInterface* media_transport_ = nullptr;
+  MediaTransportInterface* media_transport_ =
+      nullptr;  // TODO(bugs.webrtc.org/9987): Object is thread safe, but
+                // pointer accessed on both signaling and network thread.
 
   // Cached value of whether the media transport is ready to send.
   bool media_transport_ready_to_send_data_ RTC_GUARDED_BY(signaling_thread()) =
       false;
 
   // Used to invoke media transport signals on the signaling thread.
-  std::unique_ptr<rtc::AsyncInvoker> media_transport_invoker_;
+  std::unique_ptr<rtc::AsyncInvoker> media_transport_invoker_
+      RTC_GUARDED_BY(network_thread());
 
   // Identical to the signals for SCTP, but from media transport:
   sigslot::signal1<bool> SignalMediaTransportWritable_s
@@ -1253,11 +1287,15 @@ class PeerConnection : public PeerConnectionInternal,
   sigslot::signal1<int> SignalMediaTransportChannelClosed_s
       RTC_GUARDED_BY(signaling_thread());
 
-  std::unique_ptr<SessionDescriptionInterface> current_local_description_;
-  std::unique_ptr<SessionDescriptionInterface> pending_local_description_;
-  std::unique_ptr<SessionDescriptionInterface> current_remote_description_;
-  std::unique_ptr<SessionDescriptionInterface> pending_remote_description_;
-  bool dtls_enabled_ = false;
+  std::unique_ptr<SessionDescriptionInterface> current_local_description_
+      RTC_GUARDED_BY(signaling_thread());
+  std::unique_ptr<SessionDescriptionInterface> pending_local_description_
+      RTC_GUARDED_BY(signaling_thread());
+  std::unique_ptr<SessionDescriptionInterface> current_remote_description_
+      RTC_GUARDED_BY(signaling_thread());
+  std::unique_ptr<SessionDescriptionInterface> pending_remote_description_
+      RTC_GUARDED_BY(signaling_thread());
+  bool dtls_enabled_ RTC_GUARDED_BY(signaling_thread()) = false;
   // Specifies which kind of data channel is allowed. This is controlled
   // by the chrome command-line flag and constraints:
   // 1. If chrome command-line switch 'enable-sctp-data-channels' is enabled,

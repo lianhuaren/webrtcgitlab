@@ -16,6 +16,7 @@
 #include <string>
 #include <utility>
 
+#include "absl/algorithm/container.h"
 #include "absl/strings/match.h"
 #include "api/video/video_codec_constants.h"
 #include "api/video_codecs/sdp_video_format.h"
@@ -1995,8 +1996,13 @@ void WebRtcVideoChannel::WebRtcVideoSendStream::UpdateSendState() {
   RTC_DCHECK_RUN_ON(&thread_checker_);
   if (sending_) {
     RTC_DCHECK(stream_ != nullptr);
-    std::vector<bool> active_layers(rtp_parameters_.encodings.size());
-    for (size_t i = 0; i < active_layers.size(); ++i) {
+    size_t num_layers = rtp_parameters_.encodings.size();
+    if (parameters_.encoder_config.number_of_streams == 1) {
+      // SVC is used. Only one simulcast layer is present.
+      num_layers = 1;
+    }
+    std::vector<bool> active_layers(num_layers);
+    for (size_t i = 0; i < num_layers; ++i) {
       active_layers[i] = rtp_parameters_.encodings[i].active;
     }
     // This updates what simulcast layers are sending, and possibly starts
@@ -2301,6 +2307,15 @@ void WebRtcVideoChannel::WebRtcVideoSendStream::RecreateWebRtcStream() {
                            "payload type the set codec. Ignoring RTX.";
     config.rtp.rtx.ssrcs.clear();
   }
+  if (parameters_.encoder_config.number_of_streams == 1) {
+    // SVC is used instead of simulcast. Remove unnecessary SSRCs.
+    if (config.rtp.ssrcs.size() > 1) {
+      config.rtp.ssrcs.resize(1);
+      if (config.rtp.rtx.ssrcs.size() > 1) {
+        config.rtp.rtx.ssrcs.resize(1);
+      }
+    }
+  }
   stream_ = call_->CreateVideoSendStream(std::move(config),
                                          parameters_.encoder_config.Copy());
 
@@ -2523,12 +2538,7 @@ void WebRtcVideoChannel::WebRtcVideoReceiveStream::RecreateWebRtcVideoStream() {
 
   if (webrtc::field_trial::IsEnabled(
           "WebRTC-Video-BufferPacketsWithUnknownSsrc")) {
-    // TODO(bugs.webrtc.org/10416) : Remove this check and backfill
-    // when the stream is created (i.e remote check for frame_decryptor)
-    // once FrameDecryptor is created as part of creating receive stream.
-    if (config_.frame_decryptor) {
-      channel_->BackfillBufferedPackets(stream_params_.ssrcs);
-    }
+    channel_->BackfillBufferedPackets(stream_params_.ssrcs);
   }
 }
 
@@ -2587,9 +2597,9 @@ void WebRtcVideoChannel::WebRtcVideoReceiveStream::SetFrameDecryptor(
   config_.frame_decryptor = frame_decryptor;
   if (stream_) {
     RTC_LOG(LS_INFO)
-        << "RecreateWebRtcStream (recv) because of SetFrameDecryptor, "
+        << "Setting FrameDecryptor (recv) because of SetFrameDecryptor, "
         << "remote_ssrc=" << config_.rtp.remote_ssrc;
-    RecreateWebRtcVideoStream();
+    stream_->SetFrameDecryptor(frame_decryptor);
   }
 }
 
@@ -2859,12 +2869,10 @@ std::vector<webrtc::VideoStream> EncoderStreamFactory::CreateEncoderStreams(
     const int max_framerate = GetMaxFramerate(encoder_config, layers.size());
     // Update the active simulcast layers and configured bitrates.
     bool is_highest_layer_max_bitrate_configured = false;
-    const bool has_scale_resolution_down_by =
-        std::any_of(encoder_config.simulcast_layers.begin(),
-                    encoder_config.simulcast_layers.end(),
-                    [](const webrtc::VideoStream& layer) {
-                      return layer.scale_resolution_down_by != -1.;
-                    });
+    const bool has_scale_resolution_down_by = absl::c_any_of(
+        encoder_config.simulcast_layers, [](const webrtc::VideoStream& layer) {
+          return layer.scale_resolution_down_by != -1.;
+        });
     const int normalized_width =
         NormalizeSimulcastSize(width, encoder_config.number_of_streams);
     const int normalized_height =

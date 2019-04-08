@@ -129,8 +129,15 @@ void PlatformThread::Stop() {
 #if defined(WEBRTC_WIN)
   // Set stop_ to |true| on the worker thread.
   bool queued = QueueAPC(&RaiseFlag, reinterpret_cast<ULONG_PTR>(&stop_));
-  // Queuing the APC can fail if the thread is being terminated.
-  RTC_CHECK(queued || GetLastError() == ERROR_GEN_FAILURE);
+  if (!queued) {
+    // Queuing the APC can fail if the thread is being terminated. This should
+    // return ERROR_GEN_FAILURE, though Wine returns ERROR_ACCESS_DENIED, so
+    // allow for either.
+    auto error = ::GetLastError();
+    if (error != ERROR_GEN_FAILURE && error != ERROR_ACCESS_DENIED) {
+      RTC_CHECK(false) << "Failed to QueueUserAPC, error: " << error;
+    }
+  }
   WaitForSingleObject(thread_, INFINITE);
   CloseHandle(thread_);
   thread_ = nullptr;
@@ -218,7 +225,6 @@ bool PlatformThread::SetPriority(ThreadPriority priority) {
   if (run_function_) {
     // The non-deprecated way of how this function gets called, is that it must
     // be called on the worker thread itself.
-    RTC_DCHECK(!thread_checker_.CalledOnValidThread());
     RTC_DCHECK(spawned_thread_checker_.CalledOnValidThread());
   } else {
     // In the case of deprecated use of this method, it must be called on the

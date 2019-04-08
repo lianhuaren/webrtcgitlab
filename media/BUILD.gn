@@ -58,6 +58,7 @@ rtc_source_set("rtc_vp9_profile") {
     "..:webrtc_common",
     "../api/video_codecs:video_codecs_api",
     "../rtc_base:rtc_base_approved",
+    "../rtc_base/system:rtc_export",
     "//third_party/abseil-cpp/absl/types:optional",
   ]
 }
@@ -136,10 +137,6 @@ rtc_static_library("rtc_media_base") {
   if (!build_with_mozilla) {
     deps += [ "../p2p" ]
   }
-
-  if (is_nacl) {
-    deps += [ "//native_client_sdk/src/libraries/nacl_io" ]
-  }
 }
 
 rtc_static_library("rtc_constants") {
@@ -172,6 +169,7 @@ rtc_static_library("rtc_simulcast_encoder_adapter") {
     "../rtc_base:rtc_base_approved",
     "../rtc_base:sequenced_task_checker",
     "../rtc_base/experiments:rate_control_settings",
+    "../rtc_base/system:rtc_export",
     "../system_wrappers",
     "../system_wrappers:field_trial",
     "//third_party/abseil-cpp/absl/types:optional",
@@ -189,11 +187,11 @@ rtc_static_library("rtc_encoder_simulcast_proxy") {
   ]
   deps = [
     ":rtc_simulcast_encoder_adapter",
-    "../:webrtc_common",
     "../api/video:video_bitrate_allocation",
     "../api/video:video_frame",
     "../api/video_codecs:video_codecs_api",
     "../modules/video_coding:video_codec_interface",
+    "../rtc_base/system:rtc_export",
   ]
 }
 
@@ -260,6 +258,8 @@ rtc_static_library("rtc_audio_video") {
   libs = []
   deps = [
     "../api:scoped_refptr",
+    "../api/task_queue",
+    "../api/task_queue:global_task_queue_factory",
     "../api/video:video_bitrate_allocation",
     "../api/video:video_bitrate_allocator_factory",
     "../modules/audio_processing:api",
@@ -447,7 +447,6 @@ if (rtc_include_tests) {
       ":rtc_internal_video_codecs",
       ":rtc_media",
       ":rtc_media_base",
-      "..:webrtc_common",
       "../api:call_api",
       "../api/video:video_bitrate_allocation",
       "../api/video:video_frame",
@@ -493,6 +492,8 @@ if (rtc_include_tests) {
       "../:webrtc_common",
       "../api:fake_media_transport",
       "../api:scoped_refptr",
+      "../api/task_queue",
+      "../api/task_queue:default_task_queue_factory",
       "../api/test/video:function_video_factory",
       "../api/units:time_delta",
       "../api/video:video_frame_i420",

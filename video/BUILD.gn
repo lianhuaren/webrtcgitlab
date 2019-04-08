@@ -50,7 +50,6 @@ rtc_static_library("video") {
 
   deps = [
     ":frame_dumping_decoder",
-    "..:webrtc_common",
     "../api:array_view",
     "../api:fec_controller_api",
     "../api:libjingle_peerconnection_api",
@@ -110,6 +109,7 @@ rtc_static_library("video") {
     "../system_wrappers",
     "../system_wrappers:field_trial",
     "../system_wrappers:metrics",
+    "//third_party/abseil-cpp/absl/algorithm:container",
     "//third_party/abseil-cpp/absl/memory",
     "//third_party/abseil-cpp/absl/types:optional",
   ]
@@ -211,6 +211,7 @@ rtc_source_set("video_stream_encoder_impl") {
     "../rtc_base/system:fallthrough",
     "../rtc_base/task_utils:repeating_task",
     "../system_wrappers:field_trial",
+    "//third_party/abseil-cpp/absl/algorithm:container",
     "//third_party/abseil-cpp/absl/memory",
     "//third_party/abseil-cpp/absl/types:optional",
   ]
@@ -246,6 +247,8 @@ if (rtc_include_tests) {
       "../api:fec_controller_api",
       "../api:test_dependency_factory",
       "../api:video_quality_test_fixture_api",
+      "../api/task_queue",
+      "../api/task_queue:default_task_queue_factory",
       "../api/video:builtin_video_bitrate_allocator_factory",
       "../api/video:video_bitrate_allocator_factory",
       "../api/video:video_frame",
@@ -282,6 +285,7 @@ if (rtc_include_tests) {
       "../test:test_support_test_artifacts",
       "../test:video_test_common",
       "../test:video_test_support",
+      "//third_party/abseil-cpp/absl/algorithm:container",
       "//third_party/abseil-cpp/absl/memory",
     ]
 
@@ -298,7 +302,6 @@ if (rtc_include_tests) {
     ]
     deps = [
       ":video_quality_test",
-      "../:webrtc_common",
       "../api:simulated_network_api",
       "../api:test_dependency_factory",
       "../api:video_quality_test_fixture_api",
@@ -504,7 +507,6 @@ if (rtc_include_tests) {
       ":video",
       ":video_mocks",
       ":video_stream_encoder_impl",
-      "../:webrtc_common",
       "../api:fake_frame_decryptor",
       "../api:fake_frame_encryptor",
       "../api:libjingle_peerconnection_api",
@@ -580,6 +582,7 @@ if (rtc_include_tests) {
       "../test:test_support",
       "../test:video_test_common",
       "//testing/gtest",
+      "//third_party/abseil-cpp/absl/algorithm:container",
       "//third_party/abseil-cpp/absl/memory",
       "//third_party/abseil-cpp/absl/types:optional",
     ]

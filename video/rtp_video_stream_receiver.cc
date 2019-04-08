@@ -10,10 +10,10 @@
 
 #include "video/rtp_video_stream_receiver.h"
 
-#include <algorithm>
 #include <utility>
 #include <vector>
 
+#include "absl/algorithm/container.h"
 #include "absl/memory/memory.h"
 #include "media/base/media_constants.h"
 #include "modules/pacing/packet_router.h"
@@ -175,11 +175,14 @@ RtpVideoStreamReceiver::RtpVideoStreamReceiver(
       clock_, kPacketBufferStartSize, packet_buffer_max_size, this);
   reference_finder_ =
       absl::make_unique<video_coding::RtpFrameReferenceFinder>(this);
+
   // Only construct the encrypted receiver if frame encryption is enabled.
-  if (frame_decryptor != nullptr ||
-      config_.crypto_options.sframe.require_frame_encryption) {
+  if (config_.crypto_options.sframe.require_frame_encryption) {
     buffered_frame_decryptor_ =
-        absl::make_unique<BufferedFrameDecryptor>(this, this, frame_decryptor);
+        absl::make_unique<BufferedFrameDecryptor>(this, this);
+    if (frame_decryptor != nullptr) {
+      buffered_frame_decryptor_->SetFrameDecryptor(std::move(frame_decryptor));
+    }
   }
 }
 
@@ -452,6 +455,16 @@ void RtpVideoStreamReceiver::OnDecryptionStatusChange(int status) {
   frames_decryptable_.store(status == 0);
 }
 
+void RtpVideoStreamReceiver::SetFrameDecryptor(
+    rtc::scoped_refptr<FrameDecryptorInterface> frame_decryptor) {
+  RTC_DCHECK_RUN_ON(&network_tc_);
+  if (buffered_frame_decryptor_ == nullptr) {
+    buffered_frame_decryptor_ =
+        absl::make_unique<BufferedFrameDecryptor>(this, this);
+  }
+  buffered_frame_decryptor_->SetFrameDecryptor(std::move(frame_decryptor));
+}
+
 void RtpVideoStreamReceiver::UpdateRtt(int64_t max_rtt_ms) {
   if (nack_module_)
     nack_module_->UpdateRtt(max_rtt_ms);
@@ -468,15 +481,14 @@ absl::optional<int64_t> RtpVideoStreamReceiver::LastReceivedKeyframePacketMs()
 
 void RtpVideoStreamReceiver::AddSecondarySink(RtpPacketSinkInterface* sink) {
   RTC_DCHECK_CALLED_SEQUENTIALLY(&worker_task_checker_);
-  RTC_DCHECK(std::find(secondary_sinks_.cbegin(), secondary_sinks_.cend(),
-                       sink) == secondary_sinks_.cend());
+  RTC_DCHECK(!absl::c_linear_search(secondary_sinks_, sink));
   secondary_sinks_.push_back(sink);
 }
 
 void RtpVideoStreamReceiver::RemoveSecondarySink(
     const RtpPacketSinkInterface* sink) {
   RTC_DCHECK_CALLED_SEQUENTIALLY(&worker_task_checker_);
-  auto it = std::find(secondary_sinks_.begin(), secondary_sinks_.end(), sink);
+  auto it = absl::c_find(secondary_sinks_, sink);
   if (it == secondary_sinks_.end()) {
     // We might be rolling-back a call whose setup failed mid-way. In such a
     // case, it's simpler to remove "everything" rather than remember what

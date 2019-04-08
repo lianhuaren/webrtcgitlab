@@ -404,8 +404,6 @@ class Call final : public webrtc::Call,
   MediaTransportInterface* media_transport_
       RTC_GUARDED_BY(&target_observer_crit_) = nullptr;
 
-  const bool field_trial_webrtc_video_buffer_packets_with_unknown_ssrc_;
-
   RTC_DISALLOW_COPY_AND_ASSIGN(Call);
 };
 }  // namespace internal
@@ -424,16 +422,20 @@ std::string Call::Stats::ToString(int64_t time_ms) const {
 }
 
 Call* Call::Create(const Call::Config& config) {
-  return Create(
-      config, Clock::GetRealTimeClock(), ProcessThread::Create("PacerThread"),
-      ProcessThread::Create("ModuleProcessThread"), &GlobalTaskQueueFactory());
+  return Create(config, Clock::GetRealTimeClock(),
+                ProcessThread::Create("PacerThread"),
+                ProcessThread::Create("ModuleProcessThread"));
 }
 
 Call* Call::Create(const Call::Config& config,
                    Clock* clock,
                    std::unique_ptr<ProcessThread> call_thread,
-                   std::unique_ptr<ProcessThread> pacer_thread,
-                   TaskQueueFactory* task_queue_factory) {
+                   std::unique_ptr<ProcessThread> pacer_thread) {
+  // TODO(bugs.webrtc.org/10284): DCHECK task_queue_factory dependency is
+  // always provided in the config.
+  TaskQueueFactory* task_queue_factory = config.task_queue_factory
+                                             ? config.task_queue_factory
+                                             : &GlobalTaskQueueFactory();
   return new internal::Call(
       clock, config,
       absl::make_unique<RtpTransportControllerSend>(
@@ -484,10 +486,7 @@ Call::Call(Clock* clock,
       receive_side_cc_(clock_, transport_send->packet_router()),
       receive_time_calculator_(ReceiveTimeCalculator::CreateFromFieldTrial()),
       video_send_delay_stats_(new SendDelayStats(clock_)),
-      start_ms_(clock_->TimeInMilliseconds()),
-      field_trial_webrtc_video_buffer_packets_with_unknown_ssrc_(
-          webrtc::field_trial::IsEnabled(
-              "WebRTC-Video-BufferPacketsWithUnknownSsrc")) {
+      start_ms_(clock_->TimeInMilliseconds()) {
   RTC_DCHECK(config.event_log != nullptr);
   transport_send_ = std::move(transport_send);
   transport_send_ptr_ = transport_send_.get();
@@ -884,7 +883,7 @@ webrtc::VideoSendStream* Call::CreateVideoSendStream(
   std::unique_ptr<FecController> fec_controller =
       config_.fec_controller_factory
           ? config_.fec_controller_factory->CreateFecController()
-          : absl::make_unique<FecControllerDefault>(Clock::GetRealTimeClock());
+          : absl::make_unique<FecControllerDefault>(clock_);
   return CreateVideoSendStream(std::move(config), std::move(encoder_config),
                                std::move(fec_controller));
 }
@@ -1410,27 +1409,6 @@ PacketReceiver::DeliveryStatus Call::DeliverRtp(MediaType media_type,
     // incoming packets to be passed on via the demuxer to a receive stream
     // which is being torned down.
     return DELIVERY_UNKNOWN_SSRC;
-  }
-
-  if (field_trial_webrtc_video_buffer_packets_with_unknown_ssrc_) {
-    // Check if packet arrives for a stream that requires decryption
-    // but does not yet have a FrameDecryptor.
-    // In that case buffer the packet and replay it when the frame decryptor
-    // is set.
-    // TODO(bugs.webrtc.org/10416) : Remove this check once FrameDecryptor
-    // is created as part of creating receive stream.
-    const uint32_t ssrc = parsed_packet.Ssrc();
-    auto vrs = std::find_if(
-        video_receive_streams_.begin(), video_receive_streams_.end(),
-        [&](const VideoReceiveStream* stream) {
-          return (stream->config().rtp.remote_ssrc == ssrc ||
-                  stream->config().rtp.rtx_ssrc == ssrc);
-        });
-    if (vrs != video_receive_streams_.end() &&
-        (*vrs)->config().crypto_options.sframe.require_frame_encryption &&
-        (*vrs)->config().frame_decryptor == nullptr) {
-      return DELIVERY_UNKNOWN_SSRC;
-    }
   }
 
   parsed_packet.IdentifyExtensions(it->second.extensions);

@@ -14,13 +14,13 @@
 #include <string>
 
 #include "absl/types/optional.h"
+#include "api/fec_controller.h"
 #include "api/rtp_parameters.h"
 #include "api/transport/network_control.h"
 #include "api/units/data_rate.h"
 #include "api/units/data_size.h"
 #include "api/units/time_delta.h"
 #include "api/video/video_codec_type.h"
-#include "common_types.h"  // NOLINT(build/include)
 #include "test/frame_generator.h"
 #include "test/scenario/quality_info.h"
 
@@ -175,14 +175,15 @@ struct VideoStreamConfig {
     TimeDelta nack_history_time = TimeDelta::ms(1000);
     bool use_flexfec = false;
     bool use_ulpfec = false;
+    FecControllerFactoryInterface* fec_controller_factory = nullptr;
   } stream;
-  struct Renderer {
+  struct Rendering {
     enum Type { kFake } type = kFake;
-  };
-  struct analyzer {
-    bool log_to_file = false;
-    std::function<void(const VideoFrameQualityInfo&)> frame_quality_handler;
-  } analyzer;
+    std::string sync_group;
+  } render;
+  struct Hooks {
+    std::vector<std::function<void(const VideoFramePair&)>> frame_pair_handlers;
+  } hooks;
 };
 
 struct AudioStreamConfig {
@@ -222,7 +223,7 @@ struct AudioStreamConfig {
     ~Stream();
     bool in_bandwidth_estimation = false;
   } stream;
-  struct Render {
+  struct Rendering {
     std::string sync_group;
   } render;
 };

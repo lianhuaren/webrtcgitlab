@@ -26,7 +26,6 @@
 #include "api/video_codecs/video_codec.h"
 #include "api/video_codecs/video_decoder.h"
 #include "api/video_codecs/video_encoder_config.h"
-#include "common_types.h"  // NOLINT(build/include)
 #include "common_video/h264/h264_common.h"
 #include "media/base/h264_profile_level_id.h"
 #include "media/base/media_constants.h"
@@ -38,7 +37,6 @@
 #include "modules/video_coding/utility/ivf_file_writer.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/cpu_time.h"
-#include "rtc_base/event.h"
 #include "rtc_base/strings/string_builder.h"
 #include "rtc_base/time_utils.h"
 #include "system_wrappers/include/cpu_info.h"
@@ -419,7 +417,7 @@ void VideoCodecTestFixtureImpl::RunTest(
 }
 
 void VideoCodecTestFixtureImpl::ProcessAllFrames(
-    rtc::TaskQueue* task_queue,
+    TaskQueueForTest* task_queue,
     const std::vector<RateProfile>& rate_profiles) {
   // Set initial rates.
   auto rate_profile = rate_profiles.begin();
@@ -451,9 +449,7 @@ void VideoCodecTestFixtureImpl::ProcessAllFrames(
   }
 
   // Wait until we know that the last frame has been sent for encode.
-  rtc::Event sync_event;
-  task_queue->PostTask([&sync_event] { sync_event.Set(); });
-  sync_event.Wait(rtc::Event::kForever);
+  task_queue->SendTask([] {});
 
   // Give the VideoProcessor pipeline some time to process the last frame,
   // and then release the codecs.

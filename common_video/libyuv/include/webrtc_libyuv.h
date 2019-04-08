@@ -29,10 +29,6 @@ namespace webrtc {
 // This is the max PSNR value our algorithms can return.
 const double kPerfectPSNR = 48.0f;
 
-// TODO(nisse): Some downstream apps call CalcBufferSize with
-// ::webrtc::kI420 as the first argument. Delete after they are updated.
-const VideoType kI420 = VideoType::kI420;
-
 // Calculate the required buffer size.
 // Input:
 //   - type         :The type of the designated video frame.
@@ -76,6 +72,14 @@ int ConvertFromI420(const VideoFrame& src_frame,
                     VideoType dst_video_type,
                     int dst_sample_size,
                     uint8_t* dst_frame);
+
+rtc::scoped_refptr<I420BufferInterface> ScaleVideoFrameBuffer(
+    const I420BufferInterface& source,
+    int dst_width,
+    int dst_height);
+
+double I420SSE(const I420BufferInterface& ref_buffer,
+               const I420BufferInterface& test_buffer);
 
 // Compute PSNR for an I420 frame (all planes).
 // Returns the PSNR in decibel, to a maximum of kInfinitePSNR.

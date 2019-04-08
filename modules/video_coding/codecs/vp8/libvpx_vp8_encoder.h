@@ -20,7 +20,6 @@
 #include "api/video_codecs/video_encoder.h"
 #include "api/video_codecs/vp8_frame_buffer_controller.h"
 #include "api/video_codecs/vp8_frame_config.h"
-#include "common_types.h"  // NOLINT(build/include)
 #include "modules/video_coding/codecs/vp8/include/vp8.h"
 #include "modules/video_coding/codecs/vp8/libvpx_interface.h"
 #include "modules/video_coding/include/video_codec_interface.h"
@@ -61,6 +60,8 @@ class LibvpxVp8Encoder : public VideoEncoder {
   void OnPacketLossRateUpdate(float packet_loss_rate) override;
 
   void OnRttUpdate(int64_t rtt_ms) override;
+
+  void OnLossNotification(const LossNotification& loss_notification) override;
 
   EncoderInfo GetEncoderInfo() const override;
 

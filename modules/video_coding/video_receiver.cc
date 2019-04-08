@@ -15,7 +15,6 @@
 #include "api/rtp_headers.h"
 #include "api/video_codecs/video_codec.h"
 #include "api/video_codecs/video_decoder.h"
-#include "common_types.h"  // NOLINT(build/include)
 #include "modules/include/module_common_types.h"
 #include "modules/utility/include/process_thread.h"
 #include "modules/video_coding/decoder_database.h"
@@ -42,16 +41,10 @@
 namespace webrtc {
 namespace vcm {
 
-VideoReceiver::VideoReceiver(Clock* clock,
-                             VCMTiming* timing,
-                             NackSender* nack_sender,
-                             KeyFrameRequestSender* keyframe_request_sender)
+VideoReceiver::VideoReceiver(Clock* clock, VCMTiming* timing)
     : clock_(clock),
       _timing(timing),
-      _receiver(_timing,
-                clock_,
-                nack_sender,
-                keyframe_request_sender),
+      _receiver(_timing, clock_),
       _decodedFrameCallback(_timing, clock_),
       _frameTypeCallback(nullptr),
       _packetRequestCallback(nullptr),

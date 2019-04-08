@@ -16,7 +16,6 @@
 #include "api/video/video_bitrate_allocation.h"
 #include "api/video_codecs/video_codec.h"
 #include "api/video_codecs/vp8_frame_config.h"
-#include "common_types.h"  // NOLINT(build/include)
 #include "modules/video_coding/codecs/vp8/libvpx_vp8_encoder.h"
 #include "modules/video_coding/include/video_codec_interface.h"
 #include "modules/video_coding/utility/simulcast_rate_allocator.h"
@@ -171,22 +170,22 @@ TEST_F(TemporalLayersTest, 3Layers) {
   tl.UpdateConfiguration(0, &cfg);
 
   int expected_flags[16] = {
-      kTemporalUpdateLastRefAltRef,
-      kTemporalUpdateNoneNoRefGolden,
-      kTemporalUpdateGoldenWithoutDependencyRefAltRef,
-      kTemporalUpdateNone,
-      kTemporalUpdateLastRefAltRef,
-      kTemporalUpdateNone,
-      kTemporalUpdateGoldenRefAltRef,
-      kTemporalUpdateNone,
-      kTemporalUpdateLastRefAltRef,
-      kTemporalUpdateNoneNoRefGolden,
-      kTemporalUpdateGoldenWithoutDependencyRefAltRef,
-      kTemporalUpdateNone,
-      kTemporalUpdateLastRefAltRef,
-      kTemporalUpdateNone,
-      kTemporalUpdateGoldenRefAltRef,
-      kTemporalUpdateNone,
+      kTemporalUpdateLast,
+      kTemporalUpdateNoneNoRefGoldenAltRef,
+      kTemporalUpdateGoldenWithoutDependency,
+      kTemporalUpdateNoneNoRefAltRef,
+      kTemporalUpdateLast,
+      kTemporalUpdateNoneNoRefAltRef,
+      kTemporalUpdateGolden,
+      kTemporalUpdateNoneNoRefAltRef,
+      kTemporalUpdateLast,
+      kTemporalUpdateNoneNoRefGoldenAltRef,
+      kTemporalUpdateGoldenWithoutDependency,
+      kTemporalUpdateNoneNoRefAltRef,
+      kTemporalUpdateLast,
+      kTemporalUpdateNoneNoRefAltRef,
+      kTemporalUpdateGolden,
+      kTemporalUpdateNoneNoRefAltRef,
   };
   int expected_temporal_idx[16] = {0, 2, 1, 2, 0, 2, 1, 2,
                                    0, 2, 1, 2, 0, 2, 1, 2};
@@ -527,7 +526,7 @@ TEST_F(TemporalLayersTest, DoesNotReferenceUnlessGuaranteedToExist) {
   tl_config = tl.UpdateLayerConfig(0, timestamp + 1);
   EXPECT_TRUE(tl_config.last_buffer_flags & BufferFlags::kReference);
   EXPECT_FALSE(tl_config.golden_buffer_flags & BufferFlags::kReference);
-  EXPECT_TRUE(tl_config.arf_buffer_flags & BufferFlags::kReference);
+  EXPECT_FALSE(tl_config.arf_buffer_flags & BufferFlags::kReference);
 
   // TL0 base layer frame.
   tl_config = tl.UpdateLayerConfig(0, timestamp + 2);
@@ -548,7 +547,7 @@ TEST_F(TemporalLayersTest, DoesNotReferenceUnlessGuaranteedToExist) {
   tl_config = tl.UpdateLayerConfig(0, ++timestamp + 1);
   EXPECT_TRUE(tl_config.last_buffer_flags & BufferFlags::kReference);
   EXPECT_TRUE(tl_config.golden_buffer_flags & BufferFlags::kReference);
-  EXPECT_TRUE(tl_config.arf_buffer_flags & BufferFlags::kReference);
+  EXPECT_FALSE(tl_config.arf_buffer_flags & BufferFlags::kReference);
 }
 
 TEST_F(TemporalLayersTest, DoesNotReferenceUnlessGuaranteedToExistLongDelay) {
@@ -628,12 +627,12 @@ TEST_F(TemporalLayersTest, KeyFrame) {
 
   int expected_flags[8] = {
       kTemporalUpdateLastRefAltRef,
-      kTemporalUpdateNoneNoRefGolden,
-      kTemporalUpdateGoldenWithoutDependencyRefAltRef,
-      kTemporalUpdateNone,
-      kTemporalUpdateLastRefAltRef,
-      kTemporalUpdateNone,
-      kTemporalUpdateGoldenRefAltRef,
+      kTemporalUpdateNoneNoRefGoldenAltRef,
+      kTemporalUpdateGoldenWithoutDependency,
+      kTemporalUpdateNoneNoRefAltRef,
+      kTemporalUpdateLast,
+      kTemporalUpdateNoneNoRefAltRef,
+      kTemporalUpdateGolden,
       kTemporalUpdateNone,
   };
   int expected_temporal_idx[8] = {0, 2, 1, 2, 0, 2, 1, 2};

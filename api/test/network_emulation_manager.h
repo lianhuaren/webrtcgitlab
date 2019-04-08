@@ -46,6 +46,19 @@ struct EmulatedEndpointConfig {
   // If specified will be used as IP address for endpoint node. Must be unique
   // among all created nodes.
   absl::optional<rtc::IPAddress> ip;
+  // Should endpoint be enabled or not, when it will be created.
+  // Enabled endpoints will be available for webrtc to send packets.
+  bool start_as_enabled = true;
+};
+
+// Provide interface to obtain all required objects to inject network emulation
+// layer into PeerConnection.
+class EmulatedNetworkManagerInterface {
+ public:
+  virtual ~EmulatedNetworkManagerInterface() = default;
+
+  virtual rtc::Thread* network_thread() = 0;
+  virtual rtc::NetworkManager* network_manager() = 0;
 };
 
 // Provides an API for creating and configuring emulated network layer.
@@ -63,22 +76,33 @@ class NetworkEmulationManager {
   // Creates an emulated endpoint, which represents single network interface on
   // the peer's device.
   virtual EmulatedEndpoint* CreateEndpoint(EmulatedEndpointConfig config) = 0;
+  // Enable emulated endpoint to make it available for webrtc.
+  // Caller mustn't enable currently enabled endpoint.
+  virtual void EnableEndpoint(EmulatedEndpoint* endpoint) = 0;
+  // Disable emulated endpoint to make it unavailable for webrtc.
+  // Caller mustn't disable currently disabled endpoint.
+  virtual void DisableEndpoint(EmulatedEndpoint* endpoint) = 0;
 
   // Creates a route between endpoints going through specified network nodes.
   // This route is single direction only and describe how traffic that was
   // sent by network interface |from| have to be delivered to the network
-  // interface |to|. Return object can be used to remove created route.
+  // interface |to|. Return object can be used to remove created route. The
+  // route must contains at least one network node inside it.
   //
-  // Assume there are endpoints E1, E2 and E3 and network nodes A, B, C and D.
-  // Also assume, that there is a route constructed via A, B and C like this:
-  // E1 -> A -> B -> C -> E2. In such case:
-  //   * Caller mustn't use A, B and C in any route, that is leading to E2.
-  //   * If caller will then create a new route E1 -> D -> E3, then first
-  //     route will be corrupted, so if caller want to do this, first route
-  //     should be deleted by ClearRoute(...) and then a new one should be
-  //     created.
-  //   * Caller can use A, B or C for any other routes.
-  //   * Caller can create other routes leading to E2.
+  // Assume that E{0-9} are endpoints and N{0-9} are network nodes, then
+  // creation of the route have to follow these rules:
+  //   1. A route consists of a source endpoint, an ordered list of one or
+  //      more network nodes, and a destination endpoint.
+  //   2. If (E1, ..., E2) is a route, then E1 != E2.
+  //      In other words, the source and the destination may not be the same.
+  //   3. Given two simultaneously existing routes (E1, ..., E2) and
+  //      (E3, ..., E4), either E1 != E3 or E2 != E4.
+  //      In other words, there may be at most one route from any given source
+  //      endpoint to any given destination endpoint.
+  //   4. Given two simultaneously existing routes (E1, ..., N1, ..., E2)
+  //      and (E3, ..., N2, ..., E4), either N1 != N2 or E2 != E4.
+  //      In other words, a network node may not belong to two routes that lead
+  //      to the same destination endpoint.
   virtual EmulatedRoute* CreateRoute(
       EmulatedEndpoint* from,
       const std::vector<EmulatedNetworkNode*>& via_nodes,
@@ -88,16 +112,13 @@ class NetworkEmulationManager {
   // removed earlier.
   virtual void ClearRoute(EmulatedRoute* route) = 0;
 
-  // Creates rtc::Thread that should be used as network thread for peer
-  // connection. Created thread contains special rtc::SocketServer inside it
-  // to enable correct integration between peer connection and emulated network
-  // layer.
-  virtual rtc::Thread* CreateNetworkThread(
-      const std::vector<EmulatedEndpoint*>& endpoints) = 0;
-  // Creates rtc::NetworkManager that should be used inside
-  // cricket::PortAllocator for peer connection to provide correct list of
-  // network interfaces, that exists in emulated network later.
-  virtual rtc::NetworkManager* CreateNetworkManager(
+  // Creates EmulatedNetworkManagerInterface which can be used then to inject
+  // network emulation layer into PeerConnection. |endpoints| - are available
+  // network interfaces for PeerConnection. If endpoint is enabled, it will be
+  // immediately available for PeerConnection, otherwise user will be able to
+  // enable endpoint later to make it available for PeerConnection.
+  virtual EmulatedNetworkManagerInterface*
+  CreateEmulatedNetworkManagerInterface(
       const std::vector<EmulatedEndpoint*>& endpoints) = 0;
 };
 

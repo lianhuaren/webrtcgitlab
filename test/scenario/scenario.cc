@@ -19,6 +19,8 @@
 #include "test/logging/file_log_writer.h"
 #include "test/scenario/network/network_emulation.h"
 #include "test/testsupport/file_utils.h"
+#include "test/time_controller/real_time_controller.h"
+#include "test/time_controller/simulated_time_controller.h"
 
 WEBRTC_DEFINE_bool(scenario_logs, false, "Save logs from scenario framework.");
 WEBRTC_DEFINE_string(scenario_logs_root,
@@ -28,7 +30,8 @@ WEBRTC_DEFINE_string(scenario_logs_root,
 namespace webrtc {
 namespace test {
 namespace {
-int64_t kMicrosPerSec = 1000000;
+const Timestamp kSimulatedStartTime = Timestamp::seconds(100000);
+
 std::unique_ptr<FileLogWriterFactory> GetScenarioLogManager(
     std::string file_name) {
   if (FLAG_scenario_logs && !file_name.empty()) {
@@ -42,37 +45,22 @@ std::unique_ptr<FileLogWriterFactory> GetScenarioLogManager(
   }
   return nullptr;
 }
-}
-
-RepeatedActivity::RepeatedActivity(TimeDelta interval,
-                                   std::function<void(TimeDelta)> function)
-    : interval_(interval), function_(function) {}
-
-void RepeatedActivity::Stop() {
-  interval_ = TimeDelta::PlusInfinity();
-}
-
-void RepeatedActivity::Poll(Timestamp time) {
-  RTC_DCHECK(last_update_.IsFinite());
-  if (time >= last_update_ + interval_) {
-    function_(time - last_update_);
-    last_update_ = time;
+std::unique_ptr<TimeController> CreateTimeController(bool real_time) {
+  if (real_time) {
+    return absl::make_unique<RealTimeController>();
+  } else {
+    return absl::make_unique<GlobalSimulatedTimeController>(
+        kSimulatedStartTime);
   }
 }
-
-void RepeatedActivity::SetStartTime(Timestamp time) {
-  last_update_ = time;
-}
-
-Timestamp RepeatedActivity::NextTime() {
-  RTC_DCHECK(last_update_.IsFinite());
-  return last_update_ + interval_;
 }
 
 Scenario::Scenario()
-    : Scenario(std::unique_ptr<LogWriterFactoryInterface>(), true) {}
+    : Scenario(std::unique_ptr<LogWriterFactoryInterface>(),
+               /*real_time=*/false) {}
 
-Scenario::Scenario(std::string file_name) : Scenario(file_name, true) {}
+Scenario::Scenario(std::string file_name)
+    : Scenario(file_name, /*real_time=*/false) {}
 
 Scenario::Scenario(std::string file_name, bool real_time)
     : Scenario(GetScenarioLogManager(file_name), real_time) {}
@@ -81,22 +69,19 @@ Scenario::Scenario(
     std::unique_ptr<LogWriterFactoryInterface> log_writer_factory,
     bool real_time)
     : log_writer_factory_(std::move(log_writer_factory)),
-      real_time_mode_(real_time),
-      sim_clock_(100000 * kMicrosPerSec),
-      clock_(real_time ? Clock::GetRealTimeClock() : &sim_clock_),
+      time_controller_(CreateTimeController(real_time)),
+      clock_(time_controller_->GetClock()),
       audio_decoder_factory_(CreateBuiltinAudioDecoderFactory()),
-      audio_encoder_factory_(CreateBuiltinAudioEncoderFactory()) {
-  if (!real_time_mode_ && log_writer_factory_) {
-    rtc::SetClockForTesting(&event_log_fake_clock_);
-    event_log_fake_clock_.SetTimeNanos(sim_clock_.TimeInMicroseconds() * 1000);
-  }
-}
+      audio_encoder_factory_(CreateBuiltinAudioEncoderFactory()),
+      task_queue_(time_controller_->GetTaskQueueFactory()->CreateTaskQueue(
+          "Scenario",
+          TaskQueueFactory::Priority::NORMAL)) {}
 
 Scenario::~Scenario() {
   if (start_time_.IsFinite())
     Stop();
-  if (!real_time_mode_)
-    rtc::SetClockForTesting(nullptr);
+  for (auto& call_client : clients_)
+    call_client->transport_->Disconnect();
 }
 
 ColumnPrinter Scenario::TimePrinter() {
@@ -123,9 +108,8 @@ StatesPrinter* Scenario::CreatePrinter(std::string name,
 }
 
 CallClient* Scenario::CreateClient(std::string name, CallClientConfig config) {
-  RTC_DCHECK(real_time_mode_);
   CallClient* client =
-      new CallClient(clock_, GetLogWriterFactory(name), config);
+      new CallClient(time_controller_.get(), GetLogWriterFactory(name), config);
   if (config.transport.state_log_interval.IsFinite()) {
     Every(config.transport.state_log_interval, [this, client]() {
       client->network_controller_factory_.LogCongestionControllerStats(Now());
@@ -175,10 +159,10 @@ void Scenario::ChangeRoute(std::pair<CallClient*, CallClient*> clients,
 void Scenario::ChangeRoute(std::pair<CallClient*, CallClient*> clients,
                            std::vector<EmulatedNetworkNode*> over_nodes,
                            DataSize overhead) {
-  uint64_t route_id = next_route_id_++;
-  clients.second->route_overhead_.insert({route_id, overhead});
-  EmulatedNetworkNode::CreateRoute(route_id, over_nodes, clients.second);
-  clients.first->transport_.Connect(over_nodes.front(), route_id, overhead);
+  rtc::IPAddress route_ip(next_route_id_++);
+  clients.second->route_overhead_.insert({route_ip, overhead});
+  EmulatedNetworkNode::CreateRoute(route_ip, over_nodes, clients.second);
+  clients.first->transport_->Connect(over_nodes.front(), route_ip, overhead);
 }
 
 SimulatedTimeClient* Scenario::CreateSimulatedTimeClient(
@@ -187,20 +171,23 @@ SimulatedTimeClient* Scenario::CreateSimulatedTimeClient(
     std::vector<PacketStreamConfig> stream_configs,
     std::vector<EmulatedNetworkNode*> send_link,
     std::vector<EmulatedNetworkNode*> return_link) {
-  uint64_t send_id = next_route_id_++;
-  uint64_t return_id = next_route_id_++;
+  rtc::IPAddress send_ip(next_route_id_++);
+  rtc::IPAddress return_ip(next_route_id_++);
   SimulatedTimeClient* client = new SimulatedTimeClient(
-      GetLogWriterFactory(name), config, stream_configs, send_link, return_link,
-      send_id, return_id, Now());
+      time_controller_.get(), GetLogWriterFactory(name), config, stream_configs,
+      send_link, return_link, send_ip, return_ip, Now());
   if (log_writer_factory_ && !name.empty() &&
       config.transport.state_log_interval.IsFinite()) {
     Every(config.transport.state_log_interval, [this, client]() {
       client->network_controller_factory_.LogCongestionControllerStats(Now());
     });
   }
-
-  Every(client->GetNetworkControllerProcessInterval(),
-        [this, client] { client->CongestionProcess(Now()); });
+  if (client->GetNetworkControllerProcessInterval().IsFinite()) {
+    Every(client->GetNetworkControllerProcessInterval(),
+          [this, client] { client->CongestionProcess(Now()); });
+  } else {
+    task_queue_.PostTask([this, client] { client->CongestionProcess(Now()); });
+  }
   Every(TimeDelta::ms(5), [this, client] { client->PacerProcess(Now()); });
   simulated_time_clients_.emplace_back(client);
   return client;
@@ -215,45 +202,41 @@ SimulationNode* Scenario::CreateSimulationNode(
 
 SimulationNode* Scenario::CreateSimulationNode(NetworkNodeConfig config) {
   RTC_DCHECK(config.mode == NetworkNodeConfig::TrafficMode::kSimulation);
-  auto network_node = SimulationNode::Create(config);
+  auto network_node = SimulationNode::Create(clock_, &task_queue_, config);
   SimulationNode* sim_node = network_node.get();
   network_nodes_.emplace_back(std::move(network_node));
-  Every(config.update_frequency,
-        [this, sim_node] { sim_node->Process(Now()); });
   return sim_node;
 }
 
 EmulatedNetworkNode* Scenario::CreateNetworkNode(
     std::unique_ptr<NetworkBehaviorInterface> behavior) {
-  network_nodes_.emplace_back(new EmulatedNetworkNode(std::move(behavior)));
+  network_nodes_.emplace_back(
+      new EmulatedNetworkNode(clock_, &task_queue_, std::move(behavior)));
   EmulatedNetworkNode* network_node = network_nodes_.back().get();
-  // TODO(srte): Use the update interval as provided by |behavior|.
-  Every(TimeDelta::ms(5),
-        [this, network_node] { network_node->Process(Now()); });
   return network_node;
 }
 
 void Scenario::TriggerPacketBurst(std::vector<EmulatedNetworkNode*> over_nodes,
                                   size_t num_packets,
                                   size_t packet_size) {
-  uint64_t route_id = next_route_id_++;
-  EmulatedNetworkNode::CreateRoute(route_id, over_nodes, &null_receiver_);
+  rtc::IPAddress route_ip(next_route_id_++);
+  EmulatedNetworkNode::CreateRoute(route_ip, over_nodes, &null_receiver_);
   for (size_t i = 0; i < num_packets; ++i)
     over_nodes[0]->OnPacketReceived(EmulatedIpPacket(
-        rtc::SocketAddress() /*from*/, rtc::SocketAddress(), /*to*/
-        route_id, rtc::CopyOnWriteBuffer(packet_size), Now()));
+        /*from=*/rtc::SocketAddress(), /*to=*/rtc::SocketAddress(route_ip, 0),
+        rtc::CopyOnWriteBuffer(packet_size), Now()));
 }
 
 void Scenario::NetworkDelayedAction(
     std::vector<EmulatedNetworkNode*> over_nodes,
     size_t packet_size,
     std::function<void()> action) {
-  uint64_t route_id = next_route_id_++;
+  rtc::IPAddress route_ip(next_route_id_++);
   action_receivers_.emplace_back(new ActionReceiver(action));
-  EmulatedNetworkNode::CreateRoute(route_id, over_nodes,
+  EmulatedNetworkNode::CreateRoute(route_ip, over_nodes,
                                    action_receivers_.back().get());
   over_nodes[0]->OnPacketReceived(EmulatedIpPacket(
-      rtc::SocketAddress() /*from*/, rtc::SocketAddress() /*to*/, route_id,
+      /*from=*/rtc::SocketAddress(), /*to=*/rtc::SocketAddress(route_ip, 0),
       rtc::CopyOnWriteBuffer(packet_size), Now()));
 }
 
@@ -268,11 +251,11 @@ CrossTrafficSource* Scenario::CreateCrossTraffic(
 CrossTrafficSource* Scenario::CreateCrossTraffic(
     std::vector<EmulatedNetworkNode*> over_nodes,
     CrossTrafficConfig config) {
-  uint64_t route_id = next_route_id_++;
+  rtc::IPAddress route_ip(next_route_id_++);
   cross_traffic_sources_.emplace_back(
-      new CrossTrafficSource(over_nodes.front(), route_id, config));
+      new CrossTrafficSource(over_nodes.front(), route_ip, config));
   CrossTrafficSource* node = cross_traffic_sources_.back().get();
-  EmulatedNetworkNode::CreateRoute(route_id, over_nodes, &null_receiver_);
+  EmulatedNetworkNode::CreateRoute(route_ip, over_nodes, &null_receiver_);
   Every(config.min_packet_interval,
         [this, node](TimeDelta delta) { node->Process(Now(), delta); });
   return node;
@@ -289,11 +272,8 @@ VideoStreamPair* Scenario::CreateVideoStream(
 VideoStreamPair* Scenario::CreateVideoStream(
     std::pair<CallClient*, CallClient*> clients,
     VideoStreamConfig config) {
-  std::unique_ptr<RtcEventLogOutput> quality_logger;
-  if (config.analyzer.log_to_file)
-    quality_logger = clients.first->GetLogWriter(".video_quality.txt");
-  video_streams_.emplace_back(new VideoStreamPair(
-      clients.first, clients.second, config, std::move(quality_logger)));
+  video_streams_.emplace_back(
+      new VideoStreamPair(clients.first, clients.second, config));
   return video_streams_.back().get();
 }
 
@@ -316,32 +296,34 @@ AudioStreamPair* Scenario::CreateAudioStream(
 
 void Scenario::Every(TimeDelta interval,
                      std::function<void(TimeDelta)> function) {
-  repeated_activities_.emplace_back(new RepeatedActivity(interval, function));
-  if (start_time_.IsFinite()) {
-    repeated_activities_.back()->SetStartTime(Now());
-  }
+  RepeatingTaskHandle::DelayedStart(task_queue_.Get(), interval,
+                                    [interval, function] {
+                                      function(interval);
+                                      return interval;
+                                    });
 }
 
 void Scenario::Every(TimeDelta interval, std::function<void()> function) {
-  auto function_with_argument = [function](TimeDelta) { function(); };
-  repeated_activities_.emplace_back(
-      new RepeatedActivity(interval, function_with_argument));
-  if (start_time_.IsFinite()) {
-    repeated_activities_.back()->SetStartTime(Now());
-  }
+  RepeatingTaskHandle::DelayedStart(task_queue_.Get(), interval,
+                                    [interval, function] {
+                                      function();
+                                      return interval;
+                                    });
 }
 
 void Scenario::At(TimeDelta offset, std::function<void()> function) {
-  pending_activities_.emplace_back(new PendingActivity{offset, function});
+  RTC_DCHECK_GT(offset.ms(), TimeSinceStart().ms());
+  task_queue_.PostDelayedTask(function, TimeUntilTarget(offset).ms());
 }
 
 void Scenario::RunFor(TimeDelta duration) {
-  RunUntil(TimeSinceStart() + duration);
+  if (start_time_.IsInfinite())
+    Start();
+  time_controller_->Sleep(duration);
 }
 
 void Scenario::RunUntil(TimeDelta target_time_since_start) {
-  RunUntil(target_time_since_start, TimeDelta::PlusInfinity(),
-           []() { return false; });
+  RunFor(TimeUntilTarget(target_time_since_start));
 }
 
 void Scenario::RunUntil(TimeDelta target_time_since_start,
@@ -349,43 +331,16 @@ void Scenario::RunUntil(TimeDelta target_time_since_start,
                         std::function<bool()> exit_function) {
   if (start_time_.IsInfinite())
     Start();
-
-  rtc::Event done_;
-  while (!exit_function() && TimeSinceStart() < target_time_since_start) {
-    Timestamp current_time = Now();
-    TimeDelta duration = current_time - start_time_;
-    Timestamp next_time = current_time + check_interval;
-    for (auto& activity : repeated_activities_) {
-      activity->Poll(current_time);
-      next_time = std::min(next_time, activity->NextTime());
-    }
-    for (auto activity = pending_activities_.begin();
-         activity < pending_activities_.end(); activity++) {
-      if (duration > (*activity)->after_duration) {
-        (*activity)->function();
-        pending_activities_.erase(activity);
-      }
-    }
-    TimeDelta wait_time = next_time - current_time;
-    if (real_time_mode_) {
-      done_.Wait(wait_time.ms<int>());
-    } else {
-      sim_clock_.AdvanceTimeMicroseconds(wait_time.us());
-      // The fake clock is quite slow to update, we only update it if logging is
-      // turned on to save time.
-      if (log_writer_factory_)
-        event_log_fake_clock_.SetTimeNanos(sim_clock_.TimeInMicroseconds() *
-                                           1000);
-    }
+  while (check_interval >= TimeUntilTarget(target_time_since_start)) {
+    time_controller_->Sleep(check_interval);
+    if (exit_function())
+      return;
   }
+  time_controller_->Sleep(TimeUntilTarget(target_time_since_start));
 }
 
 void Scenario::Start() {
   start_time_ = Timestamp::us(clock_->TimeInMicroseconds());
-  for (auto& activity : repeated_activities_) {
-    activity->SetStartTime(start_time_);
-  }
-
   for (auto& stream_pair : video_streams_)
     stream_pair->receive()->Start();
   for (auto& stream_pair : audio_streams_)
@@ -424,6 +379,10 @@ TimeDelta Scenario::TimeSinceStart() {
   if (start_time_.IsInfinite())
     return TimeDelta::Zero();
   return Now() - start_time_;
+}
+
+TimeDelta Scenario::TimeUntilTarget(TimeDelta target_time_offset) {
+  return target_time_offset - TimeSinceStart();
 }
 
 }  // namespace test
