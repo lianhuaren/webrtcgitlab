@@ -21,12 +21,12 @@
 #include "test/gmock.h"
 #include "test/gtest.h"
 
-using testing::_;
-using testing::AtLeast;
-using testing::Field;
-using testing::Matcher;
-using testing::NiceMock;
-using testing::Return;
+using ::testing::_;
+using ::testing::AtLeast;
+using ::testing::Field;
+using ::testing::Matcher;
+using ::testing::NiceMock;
+using ::testing::Return;
 
 namespace webrtc {
 namespace test {
@@ -93,6 +93,32 @@ TEST_F(ProbeControllerTest, InitiatesProbingOnMaxBitrateIncrease) {
                                           kMaxBitrateBps + 100, NowMs());
   EXPECT_EQ(probes.size(), 1u);
   EXPECT_EQ(probes[0].target_data_rate.bps(), kMaxBitrateBps + 100);
+}
+
+TEST_F(ProbeControllerTest, ProbesOnMaxBitrateIncreaseOnlyWhenInAlr) {
+  test::ScopedFieldTrials trials("WebRTC-BweAllocProbingOnlyInAlr/Enabled/");
+  probe_controller_.reset(
+      new ProbeController(&field_trial_config_, &mock_rtc_event_log));
+  auto probes = probe_controller_->SetBitrates(kMinBitrateBps, kStartBitrateBps,
+                                               kMaxBitrateBps, NowMs());
+  probes = probe_controller_->SetEstimatedBitrate(kMaxBitrateBps - 1, NowMs());
+
+  // Wait long enough to time out exponential probing.
+  clock_.AdvanceTimeMilliseconds(kExponentialProbingTimeoutMs);
+  probes = probe_controller_->Process(NowMs());
+  EXPECT_EQ(probes.size(), 0u);
+
+  // Probe when in alr.
+  probe_controller_->SetAlrStartTimeMs(clock_.TimeInMilliseconds());
+  probes = probe_controller_->OnMaxTotalAllocatedBitrate(kMaxBitrateBps + 1,
+                                                         NowMs());
+  EXPECT_EQ(probes.size(), 2u);
+
+  // Do not probe when not in alr.
+  probe_controller_->SetAlrStartTimeMs(absl::nullopt);
+  probes = probe_controller_->OnMaxTotalAllocatedBitrate(kMaxBitrateBps + 2,
+                                                         NowMs());
+  EXPECT_TRUE(probes.empty());
 }
 
 TEST_F(ProbeControllerTest, InitiatesProbingOnMaxBitrateIncreaseAtMaxBitrate) {

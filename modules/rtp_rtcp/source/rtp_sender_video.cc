@@ -15,8 +15,8 @@
 
 #include <limits>
 #include <memory>
+#include <string>
 #include <utility>
-#include <vector>
 
 #include "absl/memory/memory.h"
 #include "absl/strings/match.h"
@@ -38,6 +38,7 @@ namespace webrtc {
 
 namespace {
 constexpr size_t kRedForFecHeaderLength = 1;
+constexpr size_t kRtpSequenceNumberMapMaxEntries = 1 << 13;
 constexpr int64_t kMaxUnretransmittableFrameIntervalMs = 33 * 4;
 
 void BuildRedPayload(const RtpPacketToSend& media_packet,
@@ -196,6 +197,14 @@ RTPSenderVideo::RTPSenderVideo(Clock* clock,
       last_rotation_(kVideoRotation_0),
       transmit_color_space_next_frame_(false),
       playout_delay_oracle_(playout_delay_oracle),
+      // TODO(eladalon): Choose whether to instantiate rtp_sequence_number_map_
+      // according to the negotiation of the RTCP message.
+      rtp_sequence_number_map_(
+          field_trials.Lookup("WebRTC-RtcpLossNotification").find("Enabled") !=
+                  std::string::npos
+              ? absl::make_unique<RtpSequenceNumberMap>(
+                    kRtpSequenceNumberMapMaxEntries)
+              : nullptr),
       red_payload_type_(-1),
       ulpfec_payload_type_(-1),
       flexfec_sender_(flexfec_sender),
@@ -622,7 +631,7 @@ bool RTPSenderVideo::SendVideo(VideoFrameType frame_type,
   const uint8_t temporal_id = GetTemporalId(*video_header);
   StorageType storage = GetStorageType(temporal_id, retransmission_settings,
                                        expected_retransmission_time_ms);
-  size_t num_packets = packetizer->NumPackets();
+  const size_t num_packets = packetizer->NumPackets();
 
   size_t unpacketized_payload_size;
   if (fragmentation && fragmentation->fragmentationVectorSize > 0) {
@@ -638,6 +647,7 @@ bool RTPSenderVideo::SendVideo(VideoFrameType frame_type,
   if (num_packets == 0)
     return false;
 
+  uint16_t first_sequence_number;
   bool first_frame = first_frame_sent_();
   for (size_t i = 0; i < num_packets; ++i) {
     std::unique_ptr<RtpPacketToSend> packet;
@@ -666,6 +676,10 @@ bool RTPSenderVideo::SendVideo(VideoFrameType frame_type,
     if (!rtp_sender_->AssignSequenceNumber(packet.get()))
       return false;
     packetized_payload_size += packet->payload_size();
+
+    if (rtp_sequence_number_map_ && i == 0) {
+      first_sequence_number = packet->SequenceNumber();
+    }
 
     if (i == 0) {
       playout_delay_oracle_->OnSentPacket(packet->SequenceNumber(),
@@ -709,6 +723,13 @@ bool RTPSenderVideo::SendVideo(VideoFrameType frame_type,
     }
   }
 
+  if (rtp_sequence_number_map_) {
+    const uint32_t timestamp = rtp_timestamp - rtp_sender_->TimestampOffset();
+    rtc::CritScope cs(&crit_);
+    rtp_sequence_number_map_->InsertFrame(first_sequence_number, num_packets,
+                                          timestamp);
+  }
+
   rtc::CritScope cs(&stats_crit_);
   RTC_DCHECK_GE(packetized_payload_size, unpacketized_payload_size);
   packetization_overhead_bitrate_.Update(
@@ -734,6 +755,37 @@ uint32_t RTPSenderVideo::PacketizationOverheadBps() const {
   rtc::CritScope cs(&stats_crit_);
   return packetization_overhead_bitrate_.Rate(clock_->TimeInMilliseconds())
       .value_or(0);
+}
+
+std::vector<RtpSequenceNumberMap::Info> RTPSenderVideo::GetSentRtpPacketInfos(
+    rtc::ArrayView<const uint16_t> sequence_numbers) const {
+  RTC_DCHECK(!sequence_numbers.empty());
+
+  std::vector<RtpSequenceNumberMap::Info> results;
+  if (!rtp_sequence_number_map_) {
+    return results;
+  }
+  results.reserve(sequence_numbers.size());
+
+  {
+    rtc::CritScope cs(&crit_);
+    for (uint16_t sequence_number : sequence_numbers) {
+      const absl::optional<RtpSequenceNumberMap::Info> info =
+          rtp_sequence_number_map_->Get(sequence_number);
+      if (!info) {
+        // The empty vector will be returned. We can delay the clearing
+        // of the vector until after we exit the critical section.
+        break;
+      }
+      results.push_back(*info);
+    }
+  }
+
+  if (results.size() != sequence_numbers.size()) {
+    results.clear();  // Some sequence number was not found.
+  }
+
+  return results;
 }
 
 StorageType RTPSenderVideo::GetStorageType(

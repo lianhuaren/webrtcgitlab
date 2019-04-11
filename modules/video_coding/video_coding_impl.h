@@ -25,7 +25,7 @@
 #include "modules/video_coding/receiver.h"
 #include "modules/video_coding/timing.h"
 #include "rtc_base/one_time_event.h"
-#include "rtc_base/sequenced_task_checker.h"
+#include "rtc_base/synchronization/sequence_checker.h"
 #include "rtc_base/thread_annotations.h"
 #include "rtc_base/thread_checker.h"
 #include "system_wrappers/include/clock.h"
@@ -80,17 +80,11 @@ class VideoReceiver : public Module {
   int32_t SetRenderDelay(uint32_t timeMS);
   int32_t Delay() const;
 
-  // DEPRECATED.
-  int SetReceiverRobustnessMode(
-      VideoCodingModule::ReceiverRobustness robustnessMode);
-
   void SetNackSettings(size_t max_nack_list_size,
                        int max_packet_age_to_nack,
                        int max_incomplete_time_ms);
 
   int32_t SetReceiveChannelParameters(int64_t rtt);
-  int32_t SetVideoProtection(VCMVideoProtection videoProtection, bool enable);
-
   int64_t TimeUntilNextProcess() override;
   void Process() override;
   void ProcessThreadAttached(ProcessThread* process_thread) override;

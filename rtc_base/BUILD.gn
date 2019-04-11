@@ -228,7 +228,7 @@ rtc_source_set("platform_thread") {
     ":rtc_task_queue_libevent",
     ":rtc_task_queue_win",
     ":rtc_task_queue_stdlib",
-    ":sequenced_task_checker",
+    "synchronization:sequence_checker",
   ]
   sources = [
     "platform_thread.cc",
@@ -319,6 +319,7 @@ rtc_source_set("thread_checker") {
     "thread_checker.h",
   ]
   deps = [
+    ":deprecation",
     "synchronization:sequence_checker",
   ]
 }
@@ -571,15 +572,6 @@ rtc_source_set("rtc_task_queue_stdlib") {
   ]
 }
 
-rtc_source_set("sequenced_task_checker") {
-  sources = [
-    "sequenced_task_checker.h",
-  ]
-  deps = [
-    "synchronization:sequence_checker",
-  ]
-}
-
 rtc_static_library("weak_ptr") {
   sources = [
     "weak_ptr.cc",
@@ -587,8 +579,8 @@ rtc_static_library("weak_ptr") {
   ]
   deps = [
     ":refcount",
-    ":sequenced_task_checker",
     "../api:scoped_refptr",
+    "synchronization:sequence_checker",
   ]
 }
 
@@ -596,10 +588,12 @@ rtc_static_library("rtc_numerics") {
   sources = [
     "numerics/exp_filter.cc",
     "numerics/exp_filter.h",
+    "numerics/math_utils.h",
     "numerics/moving_average.cc",
     "numerics/moving_average.h",
     "numerics/moving_median_filter.h",
     "numerics/percentile_filter.h",
+    "numerics/running_statistics.h",
     "numerics/samples_stats_counter.cc",
     "numerics/samples_stats_counter.h",
     "numerics/sequence_number_util.h",
@@ -1278,24 +1272,6 @@ if (rtc_include_tests) {
     ]
   }
 
-  rtc_source_set("sequenced_task_checker_unittests") {
-    testonly = true
-
-    sources = [
-      "sequenced_task_checker_unittest.cc",
-    ]
-    deps = [
-      ":checks",
-      ":rtc_base_approved",
-      ":rtc_base_tests_main",
-      ":sequenced_task_checker",
-      ":task_queue_for_test",
-      "../api:function_view",
-      "../test:test_support",
-      "//third_party/abseil-cpp/absl/memory",
-    ]
-  }
-
   rtc_source_set("weak_ptr_unittests") {
     testonly = true
 
@@ -1323,6 +1299,7 @@ if (rtc_include_tests) {
       "numerics/moving_average_unittest.cc",
       "numerics/moving_median_filter_unittest.cc",
       "numerics/percentile_filter_unittest.cc",
+      "numerics/running_statistics_unittest.cc",
       "numerics/samples_stats_counter_unittest.cc",
       "numerics/sequence_number_util_unittest.cc",
     ]

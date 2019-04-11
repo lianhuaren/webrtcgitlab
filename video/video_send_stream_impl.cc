@@ -29,7 +29,7 @@
 #include "rtc_base/experiments/rate_control_settings.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/numerics/safe_conversions.h"
-#include "rtc_base/sequenced_task_checker.h"
+#include "rtc_base/synchronization/sequence_checker.h"
 #include "rtc_base/thread_checker.h"
 #include "rtc_base/trace_event.h"
 #include "system_wrappers/include/clock.h"
@@ -143,12 +143,13 @@ RtpSenderFrameEncryptionConfig CreateFrameEncryptionConfig(
 }
 
 RtpSenderObservers CreateObservers(CallStats* call_stats,
-                                   EncoderKeyFrameCallback* encoder_feedback,
+                                   EncoderRtcpFeedback* encoder_feedback,
                                    SendStatisticsProxy* stats_proxy,
                                    SendDelayStats* send_delay_stats) {
   RtpSenderObservers observers;
   observers.rtcp_rtt_stats = call_stats;
   observers.intra_frame_callback = encoder_feedback;
+  observers.rtcp_loss_notification_observer = encoder_feedback;
   observers.rtcp_stats = stats_proxy;
   observers.rtp_stats = stats_proxy;
   observers.bitrate_observer = stats_proxy;
@@ -221,6 +222,7 @@ VideoSendStreamImpl::VideoSendStreamImpl(
       call_stats_(call_stats),
       transport_(transport),
       bitrate_allocator_(bitrate_allocator),
+      disable_padding_(true),
       max_padding_bitrate_(0),
       encoder_min_bitrate_bps_(0),
       encoder_target_rate_bps_(0),
@@ -247,6 +249,8 @@ VideoSendStreamImpl::VideoSendStreamImpl(
   RTC_DCHECK_RUN_ON(worker_queue_);
   RTC_LOG(LS_INFO) << "VideoSendStreamInternal: " << config_->ToString();
   weak_ptr_ = weak_ptr_factory_.GetWeakPtr();
+
+  encoder_feedback_.SetRtpVideoSender(rtp_video_sender_);
 
   if (media_transport_) {
     // The configured ssrc is interpreted as a channel id, so there must be
@@ -395,6 +399,7 @@ void VideoSendStreamImpl::StartupVideoSendStream() {
               SignalEncoderTimedOut();
             }
             timed_out_ = true;
+            disable_padding_ = true;
           } else if (timed_out_) {
             SignalEncoderActive();
             timed_out_ = false;
@@ -487,15 +492,17 @@ void VideoSendStreamImpl::OnBitrateAllocationUpdated(
 
 void VideoSendStreamImpl::SignalEncoderActive() {
   RTC_DCHECK_RUN_ON(worker_queue_);
-  RTC_LOG(LS_INFO) << "SignalEncoderActive, Encoder is active.";
-  bitrate_allocator_->AddObserver(this, GetAllocationConfig());
+  if (rtp_video_sender_->IsActive()) {
+    RTC_LOG(LS_INFO) << "SignalEncoderActive, Encoder is active.";
+    bitrate_allocator_->AddObserver(this, GetAllocationConfig());
+  }
 }
 
 MediaStreamAllocationConfig VideoSendStreamImpl::GetAllocationConfig() const {
   return MediaStreamAllocationConfig{
       static_cast<uint32_t>(encoder_min_bitrate_bps_),
       encoder_max_bitrate_bps_,
-      static_cast<uint32_t>(max_padding_bitrate_),
+      static_cast<uint32_t>(disable_padding_ ? 0 : max_padding_bitrate_),
       /* priority_bitrate */ 0,
       !config_->suspend_below_min_bitrate,
       config_->track_id,
@@ -581,6 +588,20 @@ EncodedImageCallback::Result VideoSendStreamImpl::OnEncodedImage(
   // Indicate that there still is activity going on.
   activity_ = true;
 
+  auto enable_padding_task = [this]() {
+    if (disable_padding_) {
+      RTC_DCHECK_RUN_ON(worker_queue_);
+      disable_padding_ = false;
+      // To ensure that padding bitrate is propagated to the bitrate allocator.
+      SignalEncoderActive();
+    }
+  };
+  if (!worker_queue_->IsCurrent()) {
+    worker_queue_->PostTask(enable_padding_task);
+  } else {
+    enable_padding_task();
+  }
+
   EncodedImageCallback::Result result(EncodedImageCallback::Result::OK);
   if (media_transport_) {
     int64_t frame_id;
@@ -649,17 +670,18 @@ uint32_t VideoSendStreamImpl::OnBitrateUpdated(BitrateAllocationUpdate update) {
   encoder_target_rate_bps_ = rtp_video_sender_->GetPayloadBitrateBps();
   const uint32_t protection_bitrate_bps =
       rtp_video_sender_->GetProtectionBitrateBps();
-  DataRate headroom = DataRate::Zero();
-  if (encoder_target_rate_bps_ >
-      encoder_max_bitrate_bps_ + protection_bitrate_bps) {
-    headroom =
-        DataRate::bps(encoder_target_rate_bps_ -
-                      (encoder_max_bitrate_bps_ + protection_bitrate_bps));
+  DataRate link_allocation = DataRate::Zero();
+  if (encoder_target_rate_bps_ > protection_bitrate_bps) {
+    link_allocation =
+        DataRate::bps(encoder_target_rate_bps_ - protection_bitrate_bps);
   }
   encoder_target_rate_bps_ =
       std::min(encoder_max_bitrate_bps_, encoder_target_rate_bps_);
+
+  DataRate encoder_target_rate = DataRate::bps(encoder_target_rate_bps_);
+  link_allocation = std::max(encoder_target_rate, link_allocation);
   video_stream_encoder_->OnBitrateUpdated(
-      DataRate::bps(encoder_target_rate_bps_), headroom,
+      encoder_target_rate, link_allocation,
       rtc::dchecked_cast<uint8_t>(update.packet_loss_ratio * 256),
       update.round_trip_time.ms());
   stats_proxy_->OnSetEncoderTargetRate(encoder_target_rate_bps_);

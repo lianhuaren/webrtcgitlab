@@ -33,7 +33,7 @@ namespace webrtc {
 namespace test {
 
 namespace {
-using testing::NiceMock;
+using ::testing::NiceMock;
 
 constexpr int kPayloadTypeOpus = 17;
 constexpr int kSamplingFrequency = 48000;
@@ -125,7 +125,7 @@ TEST(AudioWithMediaTransport, DeliversAudio) {
   std::unique_ptr<TaskQueueFactory> task_queue_factory =
       CreateDefaultTaskQueueFactory();
   RtpTransportControllerSend rtp_transport(
-      Clock::GetRealTimeClock(), null_event_log.get(), nullptr,
+      Clock::GetRealTimeClock(), null_event_log.get(), nullptr, nullptr,
       BitrateConstraints(), ProcessThread::Create("Pacer"),
       task_queue_factory.get());
   webrtc::internal::AudioSendStream send_stream(

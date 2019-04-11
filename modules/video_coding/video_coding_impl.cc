@@ -71,7 +71,7 @@ class VideoCodingModuleImpl : public VideoCodingModule {
 
   int32_t RegisterReceiveCallback(
       VCMReceiveCallback* receiveCallback) override {
-    RTC_DCHECK(construction_thread_.CalledOnValidThread());
+    RTC_DCHECK(construction_thread_.IsCurrent());
     return receiver_.RegisterReceiveCallback(receiveCallback);
   }
 
@@ -82,7 +82,7 @@ class VideoCodingModuleImpl : public VideoCodingModule {
 
   int32_t RegisterPacketRequestCallback(
       VCMPacketRequestCallback* callback) override {
-    RTC_DCHECK(construction_thread_.CalledOnValidThread());
+    RTC_DCHECK(construction_thread_.IsCurrent());
     return receiver_.RegisterPacketRequestCallback(callback);
   }
 
@@ -97,7 +97,8 @@ class VideoCodingModuleImpl : public VideoCodingModule {
   }
 
   int SetReceiverRobustnessMode(ReceiverRobustness robustnessMode) override {
-    return receiver_.SetReceiverRobustnessMode(robustnessMode);
+    RTC_CHECK_EQ(robustnessMode, kHardNack);
+    return VCM_OK;
   }
 
   void SetNackSettings(size_t max_nack_list_size,

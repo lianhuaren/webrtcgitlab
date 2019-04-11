@@ -44,8 +44,8 @@
 #include "test/gtest.h"
 #include "test/video_codec_settings.h"
 
-using testing::_;
-using testing::Return;
+using ::testing::_;
+using ::testing::Return;
 
 namespace webrtc {
 
@@ -53,9 +53,9 @@ constexpr const char* kMultiplexAssociatedCodecName = cricket::kVp9CodecName;
 const VideoCodecType kMultiplexAssociatedCodecType =
     PayloadStringToCodecType(kMultiplexAssociatedCodecName);
 
-class TestMultiplexAdapter
-    : public VideoCodecUnitTest,
-      public testing::WithParamInterface<bool /* supports_augmenting_data */> {
+class TestMultiplexAdapter : public VideoCodecUnitTest,
+                             public ::testing::WithParamInterface<
+                                 bool /* supports_augmenting_data */> {
  public:
   TestMultiplexAdapter()
       : decoder_factory_(new webrtc::MockVideoDecoderFactory),
@@ -224,8 +224,7 @@ TEST_P(TestMultiplexAdapter, EncodeDecodeI420Frame) {
   ASSERT_TRUE(WaitForEncodedFrame(&encoded_frame, &codec_specific_info));
   EXPECT_EQ(kVideoCodecMultiplex, codec_specific_info.codecType);
 
-  EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK,
-            decoder_->Decode(encoded_frame, false, &codec_specific_info, -1));
+  EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK, decoder_->Decode(encoded_frame, false, -1));
   std::unique_ptr<VideoFrame> decoded_frame;
   absl::optional<uint8_t> decoded_qp;
   ASSERT_TRUE(WaitForDecodedFrame(&decoded_frame, &decoded_qp));
@@ -242,8 +241,7 @@ TEST_P(TestMultiplexAdapter, EncodeDecodeI420AFrame) {
   ASSERT_TRUE(WaitForEncodedFrame(&encoded_frame, &codec_specific_info));
   EXPECT_EQ(kVideoCodecMultiplex, codec_specific_info.codecType);
 
-  EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK,
-            decoder_->Decode(encoded_frame, false, nullptr, 0));
+  EXPECT_EQ(WEBRTC_VIDEO_CODEC_OK, decoder_->Decode(encoded_frame, false, 0));
   std::unique_ptr<VideoFrame> decoded_frame;
   absl::optional<uint8_t> decoded_qp;
   ASSERT_TRUE(WaitForDecodedFrame(&decoded_frame, &decoded_qp));

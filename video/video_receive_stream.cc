@@ -111,7 +111,6 @@ class NullVideoDecoder : public webrtc::VideoDecoder {
 
   int32_t Decode(const webrtc::EncodedImage& input_image,
                  bool missing_frames,
-                 const webrtc::CodecSpecificInfo* codec_specific_info,
                  int64_t render_time_ms) override {
     RTC_LOG(LS_ERROR) << "The NullVideoDecoder doesn't support decoding.";
     return WEBRTC_VIDEO_CODEC_OK;
@@ -285,7 +284,7 @@ VideoReceiveStream::VideoReceiveStream(
                          new VCMTiming(clock)) {}
 
 VideoReceiveStream::~VideoReceiveStream() {
-  RTC_DCHECK_CALLED_SEQUENTIALLY(&worker_sequence_checker_);
+  RTC_DCHECK_RUN_ON(&worker_sequence_checker_);
   RTC_LOG(LS_INFO) << "~VideoReceiveStream: " << config_.ToString();
   Stop();
   if (config_.media_transport) {
@@ -296,7 +295,7 @@ VideoReceiveStream::~VideoReceiveStream() {
 }
 
 void VideoReceiveStream::SignalNetworkState(NetworkState state) {
-  RTC_DCHECK_CALLED_SEQUENTIALLY(&worker_sequence_checker_);
+  RTC_DCHECK_RUN_ON(&worker_sequence_checker_);
   rtp_video_stream_receiver_.SignalNetworkState(state);
 }
 
@@ -305,12 +304,12 @@ bool VideoReceiveStream::DeliverRtcp(const uint8_t* packet, size_t length) {
 }
 
 void VideoReceiveStream::SetSync(Syncable* audio_syncable) {
-  RTC_DCHECK_CALLED_SEQUENTIALLY(&worker_sequence_checker_);
+  RTC_DCHECK_RUN_ON(&worker_sequence_checker_);
   rtp_stream_sync_.ConfigureSync(audio_syncable);
 }
 
 void VideoReceiveStream::Start() {
-  RTC_DCHECK_CALLED_SEQUENTIALLY(&worker_sequence_checker_);
+  RTC_DCHECK_RUN_ON(&worker_sequence_checker_);
 
   if (decode_thread_.IsRunning()) {
     return;
@@ -396,7 +395,7 @@ void VideoReceiveStream::Start() {
 }
 
 void VideoReceiveStream::Stop() {
-  RTC_DCHECK_CALLED_SEQUENTIALLY(&worker_sequence_checker_);
+  RTC_DCHECK_RUN_ON(&worker_sequence_checker_);
   rtp_video_stream_receiver_.StopReceive();
 
   stats_proxy_.OnUniqueFramesCounted(
@@ -441,7 +440,7 @@ void VideoReceiveStream::RemoveSecondarySink(
 }
 
 bool VideoReceiveStream::SetBaseMinimumPlayoutDelayMs(int delay_ms) {
-  RTC_DCHECK_CALLED_SEQUENTIALLY(&worker_sequence_checker_);
+  RTC_DCHECK_RUN_ON(&worker_sequence_checker_);
   if (delay_ms < kMinBaseMinimumDelayMs || delay_ms > kMaxBaseMinimumDelayMs) {
     return false;
   }
@@ -453,7 +452,7 @@ bool VideoReceiveStream::SetBaseMinimumPlayoutDelayMs(int delay_ms) {
 }
 
 int VideoReceiveStream::GetBaseMinimumPlayoutDelayMs() const {
-  RTC_DCHECK_CALLED_SEQUENTIALLY(&worker_sequence_checker_);
+  RTC_DCHECK_RUN_ON(&worker_sequence_checker_);
 
   rtc::CritScope cs(&playout_delay_lock_);
   return base_minimum_playout_delay_ms_;
@@ -499,7 +498,7 @@ void VideoReceiveStream::RequestKeyFrame() {
 
 void VideoReceiveStream::OnCompleteFrame(
     std::unique_ptr<video_coding::EncodedFrame> frame) {
-  RTC_DCHECK_CALLED_SEQUENTIALLY(&network_sequence_checker_);
+  RTC_DCHECK_RUN_ON(&network_sequence_checker_);
   // TODO(https://bugs.webrtc.org/9974): Consider removing this workaround.
   int64_t time_now_ms = rtc::TimeMillis();
   if (last_complete_frame_time_ms_ > 0 &&
@@ -533,7 +532,7 @@ void VideoReceiveStream::OnData(uint64_t channel_id,
 }
 
 void VideoReceiveStream::OnRttUpdate(int64_t avg_rtt_ms, int64_t max_rtt_ms) {
-  RTC_DCHECK_CALLED_SEQUENTIALLY(&module_process_sequence_checker_);
+  RTC_DCHECK_RUN_ON(&module_process_sequence_checker_);
   frame_buffer_->UpdateRtt(max_rtt_ms);
   rtp_video_stream_receiver_.UpdateRtt(max_rtt_ms);
 }
@@ -543,12 +542,12 @@ void VideoReceiveStream::OnRttUpdated(int64_t rtt_ms) {
 }
 
 int VideoReceiveStream::id() const {
-  RTC_DCHECK_CALLED_SEQUENTIALLY(&worker_sequence_checker_);
+  RTC_DCHECK_RUN_ON(&worker_sequence_checker_);
   return config_.rtp.remote_ssrc;
 }
 
 absl::optional<Syncable::Info> VideoReceiveStream::GetInfo() const {
-  RTC_DCHECK_CALLED_SEQUENTIALLY(&module_process_sequence_checker_);
+  RTC_DCHECK_RUN_ON(&module_process_sequence_checker_);
   absl::optional<Syncable::Info> info =
       rtp_video_stream_receiver_.GetSyncInfo();
 
@@ -565,7 +564,7 @@ uint32_t VideoReceiveStream::GetPlayoutTimestamp() const {
 }
 
 void VideoReceiveStream::SetMinimumPlayoutDelay(int delay_ms) {
-  RTC_DCHECK_CALLED_SEQUENTIALLY(&module_process_sequence_checker_);
+  RTC_DCHECK_RUN_ON(&module_process_sequence_checker_);
   rtc::CritScope cs(&playout_delay_lock_);
   syncable_minimum_playout_delay_ms_ = delay_ms;
   UpdatePlayoutDelays();
