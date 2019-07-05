@@ -1537,9 +1537,9 @@ hooks = [
     'name': 'rc_win',
     'pattern': '.',
     'condition': 'checkout_win and host_os == "win"',
-    'action': [ 'python',
-                'src/third_party/depot_tools/download_from_google_storage.py',
+    'action': [ 'download_from_google_storage',
                 '--no_resume',
+                '--platform=win32',
                 '--no_auth',
                 '--bucket', 'chromium-browser-clang/rc',
                 '-s', 'src/build/toolchain/win/rc/win/rc.exe.sha1',
@@ -1595,10 +1595,13 @@ hooks = [
     # Download test resources, i.e. video and audio files from Google Storage.
     'pattern': '.',
     'action': ['download_from_google_storage',
-                "--no_resume",
+               '--directory',
+               '--recursive',
+               '--num_threads=10',
                '--no_auth',
+               '--quiet',
                '--bucket', 'chromium-webrtc-resources',
-               'src/resources.tgz'],
+               'src/resources'],
   },
 ]
 
